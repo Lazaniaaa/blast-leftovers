@@ -67,6 +67,7 @@ const T = {
     spentOn: 'Already spent on the Ringbearer:',
     shareTitle: (v) => `You found ${v} on Blast 🎉`,
     shareText: 'Help others check theirs before Oct 26. Here is a ready post, edit it if you like. Your address is not in it.',
+    shareDebt: (d) => `Your debt of ${d} is already subtracted, so the number is a bit lower than "Found on Blast".`,
     sharePost: 'Post on X ↗', shareCopy: 'Copy text', shareLater: 'Not now', shareBtn: 'Share on X',
     tallyChecked: (n) => `Live balance of the donation wallet across ${n} networks.`,
     tallyPartial: (ok, n, list) => `Checked ${ok} of ${n} networks. Not responding: ${list}. The real total may be higher.`,
@@ -135,6 +136,7 @@ const T = {
     spentOn: 'Вже витрачено на Ringbearer:',
     shareTitle: (v) => `Ти знайшов ${v} на Blast 🎉`,
     shareText: 'Допоможи іншим перевірити свої гаманці до 26 жовтня. Ось готовий пост, можеш його змінити. Твоєї адреси в ньому немає.',
+    shareDebt: (d) => `Борг ${d} уже віднято, тому сума трохи менша, ніж «Знайдено на Blast».`,
     sharePost: 'Запостити в X ↗', shareCopy: 'Скопіювати текст', shareLater: 'Не зараз', shareBtn: 'Поділитися в X',
     tallyChecked: (n) => `Поточний баланс донат-гаманця в ${n} мережах.`,
     tallyPartial: (ok, n, list) => `Перевірено ${ok} з ${n} мереж. Не відповіли: ${list}. Реальна сума може бути більшою.`,
@@ -261,7 +263,7 @@ function render(r) {
         <a class="strong" href="https://debank.com/profile/${r.address}" target="_blank" rel="noopener noreferrer">${t('openDebank')} ↗</a>
         <a href="${scanAddr(r.address)}" target="_blank" rel="noopener noreferrer">${t('openScan')} ↗</a>
         <a href="#" id="shareLink">${t('share')}</a>
-        ${shareAmount(r) >= SHARE_MIN_USD ? `<a class="strong" href="#" id="shareOpen">${t('shareBtn')} ↗</a>` : ''}
+        ${!isExample(r) && shareAmount(r) >= SHARE_MIN_USD ? `<a class="strong" href="#" id="shareOpen">${t('shareBtn')} ↗</a>` : ''}
       </span></div>
     <div class="figures">
       <div class="fig big"><span class="k">${t('found')}</span><span class="v">${usdPlain(found)}</span></div>
@@ -486,12 +488,16 @@ function openShare(r) {
   const text = sharePostText(v);
   document.getElementById('share-h').textContent = t('shareTitle')(fmtShare(v));
   document.getElementById('sharePreview').textContent = text;
+  const debt = r.totals?.debt || 0;
+  document.getElementById('shareDebt').textContent = debt >= 0.01 ? t('shareDebt')(fmtShare(debt)) : '';
+  document.getElementById('shareDebt').hidden = debt < 0.01;
   document.getElementById('shareX').href = 'https://x.com/intent/post?text=' + encodeURIComponent(text);
   document.getElementById('shareCopy').textContent = t('shareCopy');
   if (typeof shareDlg.showModal === 'function') shareDlg.showModal(); else shareDlg.setAttribute('open', '');
 }
+const isExample = (r) => r.address.toLowerCase() === EXAMPLE.toLowerCase();
 function maybeShare(r) {
-  if (shownFor.has(r.address) || shareAmount(r) < SHARE_MIN_USD) return;
+  if (isExample(r) || shownFor.has(r.address) || shareAmount(r) < SHARE_MIN_USD) return;
   shownFor.add(r.address);
   setTimeout(() => { if (!document.getElementById('donateDlg').open) openShare(r); }, 1800);
 }
