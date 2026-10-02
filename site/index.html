@@ -304,8 +304,15 @@ try { var t = localStorage.getItem('bl-theme'); if (t === 'light' || t === 'dark
 <script>
   // Vercel Web Analytics: cookieless visit counts. The scanned wallet address (?a=…) is removed before
   // anything is sent, so analytics never learns which wallets people check.
+  // Owner opt-out: open the site once with ?notrack to stop counting your own visits (?track turns it back on).
+  try {
+    var q = new URLSearchParams(location.search);
+    if (q.has('notrack')) localStorage.setItem('va-disable', '1');
+    if (q.has('track')) localStorage.removeItem('va-disable');
+  } catch (e) {}
   window.va = window.va || function () { (window.vaq = window.vaq || []).push(arguments); };
   window.va('beforeSend', function (event) {
+    try { if (localStorage.getItem('va-disable')) return null; } catch (e) {}
     var url = new URL(event.url);
     url.search = '';
     url.hash = '';
