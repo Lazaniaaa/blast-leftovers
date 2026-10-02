@@ -42,14 +42,13 @@ Protocol links come only from DefiLlama data (`protocols.js`). For protocols who
 
 ## Telegram bot
 
-Same scanner, answers in Telegram. Runs on your machine with long polling, no server needed.
+[@BLASTLeftoversBot](https://t.me/BLASTLeftoversBot) uses the same scanner. Shared logic lives in `site/lib/bot-core.js`.
 
-1. Create a bot with [@BotFather](https://t.me/BotFather) and copy its token.
-2. Create `.env` in this folder with `BOT_TOKEN=<your token>` (it is git-ignored).
-3. `npm install` once, then `npm run bot`.
+**Production (Vercel webhook, runs 24/7):** `site/api/telegram.js`. Telegram posts updates there; the function answers at once and scans in the background (`waitUntil`, up to 300 s). Vercel env vars: `BOT_TOKEN`, `OWNER_ID`, `WEBHOOK_SECRET`. The owner gets Telegram pings for /start and for finds of $20+; other events are in the Vercel logs.
+
+**Local runner (long polling):** `npm run bot`. Starting it removes the webhook, so the bot then lives on your machine until you set the webhook again. Reads `BOT_TOKEN` / `OWNER_ID` from a git-ignored `.env` and keeps private stats in `bot/stats.json` (owner-only `/stats`).
 
 Preview a report in the console without Telegram: `npm run bot:preview -- 0x... uk`.
-Scans run at most 2 at a time and results are cached for 5 minutes, because every scan goes out from your IP.
 
 ## Run locally
 
