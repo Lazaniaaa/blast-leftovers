@@ -374,7 +374,7 @@ async function setup() {
     { command: 'donate', description: 'Підтримати розробника' },
     { command: 'lang', description: 'English / Українська' },
   ] });
-  await tg('setMyShortDescription', { short_description: 'Find what you still have on Blast before it shuts down. Send an address, no wallet connection.' }).catch(() => {});
+  await tg('setMyShortDescription', { short_description: 'Check what you still have on Blast before it shuts down. Just send an address, no wallet connection.' }).catch(() => {});
   await tg('setMyDescription', { description: 'Blast is shutting down (UI withdrawals close Oct 26). Send any wallet address and I will find lending deposits, LP positions, staking, vaults and unfinished bridge withdrawals still on Blast. Read-only: I never ask to connect a wallet or sign anything. Open source: github.com/Lazaniaaa/blast-leftovers' }).catch(() => {});
   return me;
 }
