@@ -100,6 +100,8 @@ dialog.donate::backdrop { background: rgba(10, 12, 11, .55); }
 .tally-box .small { font-size: 12.5px; color: var(--muted); }
 .bar { height: 8px; border-radius: 999px; background: var(--line); overflow: hidden; }
 .bar > i { display: block; height: 100%; background: var(--accent); }
+.share-preview { margin: 0; padding: 12px; border-radius: 8px; background: var(--bg); border: 1px dashed var(--line); font: 14px/1.5 var(--font-body); white-space: pre-wrap; overflow-wrap: anywhere; }
+a.btn { text-decoration: none; display: inline-flex; align-items: center; }
 .donate-actions { display: flex; flex-wrap: wrap; gap: 8px; justify-content: space-between; align-items: center; }
 .chip.sale { background: transparent; border: 1px dashed var(--warn); color: var(--warn); }
 .row-title .proj { overflow-wrap: anywhere; }
@@ -269,6 +271,19 @@ try { var t = localStorage.getItem('bl-theme'); if (t === 'light' || t === 'dark
 </div>
 <button type="button" class="donate-fab" id="donateFab" hidden><span data-i18n="donateBtn"></span><span class="tally" id="fabTally"></span></button>
 
+<dialog class="donate" id="shareDlg" aria-labelledby="share-h">
+  <div class="donate-body">
+    <h2 id="share-h"></h2>
+    <p data-i18n="shareText"></p>
+    <pre class="share-preview" id="sharePreview"></pre>
+    <div class="donate-actions">
+      <a class="btn accent" id="shareX" href="#" target="_blank" rel="noopener noreferrer" data-i18n="sharePost"></a>
+      <button type="button" class="btn ghost" id="shareCopy" data-i18n="shareCopy"></button>
+      <button type="button" class="btn ghost" id="shareClose" data-i18n="shareLater"></button>
+    </div>
+  </div>
+</dialog>
+
 <dialog class="donate" id="donateDlg" aria-labelledby="donate-h">
   <div class="donate-body">
     <h2 id="donate-h" data-i18n="donateT"></h2>
@@ -285,6 +300,18 @@ try { var t = localStorage.getItem('bl-theme'); if (t === 'light' || t === 'dark
     </div>
   </div>
 </dialog>
+<script>
+  // Vercel Web Analytics: cookieless visit counts. The scanned wallet address (?a=…) is removed before
+  // anything is sent, so analytics never learns which wallets people check.
+  window.va = window.va || function () { (window.vaq = window.vaq || []).push(arguments); };
+  window.va('beforeSend', function (event) {
+    var url = new URL(event.url);
+    url.search = '';
+    url.hash = '';
+    return Object.assign({}, event, { url: url.toString() });
+  });
+</script>
+<script defer src="/_vercel/insights/script.js"></script>
 <script type="module" src="./app.js"></script>
 </body>
 </html>

@@ -65,6 +65,9 @@ const T = {
     copyAddr: 'Copy address', seeCollection: 'OCH Ringbearer on OpenSea ↗', close: 'Close',
     raised: 'Raised for the Ringbearer', tallyLoading: 'Checking 12 networks…', tallyFail: 'Could not load the total right now.', goal: 'goal',
     spentOn: 'Already spent on the Ringbearer:',
+    shareTitle: (v) => `You found ${v} on Blast 🎉`,
+    shareText: 'Help others check theirs before Oct 26. Here is a ready post, edit it if you like. Your address is not in it.',
+    sharePost: 'Post on X ↗', shareCopy: 'Copy text', shareLater: 'Not now', shareBtn: 'Share on X',
     tallyChecked: (n) => `Live balance of the donation wallet across ${n} networks.`,
     tallyPartial: (ok, n, list) => `Checked ${ok} of ${n} networks. Not responding: ${list}. The real total may be higher.`,
     gSales: 'Token sales and launches', gSalesNote: 'Looks like you bought tokens or an allocation here: money went in and tokens came back (or were supposed to). This is not a deposit, so usually nothing can be withdrawn. If the status is "not claimed", check the contract for claim or refund.',
@@ -130,6 +133,9 @@ const T = {
     copyAddr: 'Скопіювати адресу', seeCollection: 'OCH Ringbearer на OpenSea ↗', close: 'Закрити',
     raised: 'Зібрано на Ringbearer', tallyLoading: 'Перевіряю 12 мереж…', tallyFail: 'Зараз не вдалося завантажити суму.', goal: 'ціль',
     spentOn: 'Вже витрачено на Ringbearer:',
+    shareTitle: (v) => `Ти знайшов ${v} на Blast 🎉`,
+    shareText: 'Допоможи іншим перевірити свої гаманці до 26 жовтня. Ось готовий пост, можеш його змінити. Твоєї адреси в ньому немає.',
+    sharePost: 'Запостити в X ↗', shareCopy: 'Скопіювати текст', shareLater: 'Не зараз', shareBtn: 'Поділитися в X',
     tallyChecked: (n) => `Поточний баланс донат-гаманця в ${n} мережах.`,
     tallyPartial: (ok, n, list) => `Перевірено ${ok} з ${n} мереж. Не відповіли: ${list}. Реальна сума може бути більшою.`,
     gSales: 'Сейли токенів і лончі', gSalesNote: 'Схоже, тут ти купував токени чи алокацію: гроші пішли, токени прийшли (або мали прийти). Це не депозит, тож зазвичай вивести нічого не можна. Якщо статус «не заклеймлено», перевір у контракті claim або refund.',
@@ -255,6 +261,7 @@ function render(r) {
         <a class="strong" href="https://debank.com/profile/${r.address}" target="_blank" rel="noopener noreferrer">${t('openDebank')} ↗</a>
         <a href="${scanAddr(r.address)}" target="_blank" rel="noopener noreferrer">${t('openScan')} ↗</a>
         <a href="#" id="shareLink">${t('share')}</a>
+        ${shareAmount(r) >= SHARE_MIN_USD ? `<a class="strong" href="#" id="shareOpen">${t('shareBtn')} ↗</a>` : ''}
       </span></div>
     <div class="figures">
       <div class="fig big"><span class="k">${t('found')}</span><span class="v">${usdPlain(found)}</span></div>
@@ -376,6 +383,7 @@ function render(r) {
     try { await navigator.clipboard.writeText(url); e.target.textContent = t('copied'); } catch { prompt?.('', url); }
   });
   document.getElementById('dbbtn')?.addEventListener('click', () => loadDebank(r.address));
+  document.getElementById('shareOpen')?.addEventListener('click', (e) => { e.preventDefault(); openShare(r); });
 }
 
 function projName(d) {
@@ -458,6 +466,47 @@ const LOG_UK = [
 ];
 const trLog = (m) => { if (lang !== 'uk') return m; for (const [re, s] of LOG_UK) if (re.test(m)) return m.replace(re, s); return m; };
 
+// ---------- share ----------
+const SHARE_MIN_USD = 20;
+const SITE = 'blast-leftovers.vercel.app';
+// Only what is certainly still there: wallet, decoded positions, confirmed deposits, unfinished bridge
+// withdrawals, minus debt. "Likely" / "probably moved" rows and token sales are left out.
+function shareAmount(r) {
+  const t0 = r.totals || {};
+  return Math.max(0, (t0.wallet || 0) + (t0.positions || 0) + (t0.possible || 0) + (t0.bridgePending || 0) - (t0.debt || 0));
+}
+const fmtShare = (v) => '$' + v.toLocaleString('en-US', { maximumFractionDigits: v >= 100 ? 0 : 2, minimumFractionDigits: v >= 100 ? 0 : 2 });
+function sharePostText(v) {
+  return `just found ${fmtShare(v)} I forgot on Blast before it shuts down 😳\n\ncheck yours before Oct 26, just paste your address:\n${SITE}\n\nh/t @NotYur`;
+}
+const shareDlg = document.getElementById('shareDlg');
+const shownFor = new Set();
+function openShare(r) {
+  const v = shareAmount(r);
+  const text = sharePostText(v);
+  document.getElementById('share-h').textContent = t('shareTitle')(fmtShare(v));
+  document.getElementById('sharePreview').textContent = text;
+  document.getElementById('shareX').href = 'https://x.com/intent/post?text=' + encodeURIComponent(text);
+  document.getElementById('shareCopy').textContent = t('shareCopy');
+  if (typeof shareDlg.showModal === 'function') shareDlg.showModal(); else shareDlg.setAttribute('open', '');
+}
+function maybeShare(r) {
+  if (shownFor.has(r.address) || shareAmount(r) < SHARE_MIN_USD) return;
+  shownFor.add(r.address);
+  setTimeout(() => { if (!document.getElementById('donateDlg').open) openShare(r); }, 1800);
+}
+document.getElementById('shareClose').addEventListener('click', () => shareDlg.close());
+document.getElementById('shareX').addEventListener('click', () => setTimeout(() => shareDlg.close(), 300));
+shareDlg.addEventListener('click', (e) => { if (e.target === shareDlg) shareDlg.close(); });
+document.getElementById('shareCopy').addEventListener('click', async (e) => {
+  const btn = e.currentTarget;
+  try { await navigator.clipboard.writeText(document.getElementById('sharePreview').textContent); btn.textContent = t('copied'); }
+  catch {
+    const range = document.createRange(); range.selectNodeContents(document.getElementById('sharePreview'));
+    const sel = getSelection(); sel.removeAllRanges(); sel.addRange(range);
+  }
+});
+
 // ---------- donate ----------
 const fab = document.getElementById('donateFab');
 const dlg = document.getElementById('donateDlg');
@@ -494,7 +543,7 @@ function onScanDone() {
   if (!tally) setTimeout(refreshTally, 4000); // let the scan's own explorer calls finish first
   clearInterval(shakeTimer);
   // shake every ~4.5 s while visible; skip while the donate dialog is open
-  const shake = () => { if (dlg.open) return; fab.classList.remove('shake'); void fab.offsetWidth; fab.classList.add('shake'); };
+  const shake = () => { if (dlg.open || shareDlg.open) return; fab.classList.remove('shake'); void fab.offsetWidth; fab.classList.add('shake'); };
   setTimeout(shake, 1500);
   shakeTimer = setInterval(shake, 4500);
 }
@@ -531,6 +580,7 @@ async function run(address) {
     status.innerHTML = '';
     render(r);
     onScanDone();
+    maybeShare(r);
   } catch (e) {
     console.error(e);
     status.innerHTML = `<p class="error">${t('failed')}${esc(e.shortMessage || e.message)}<br>${t('retry')}</p>`;
