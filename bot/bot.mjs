@@ -54,8 +54,8 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 // ---------- texts ----------
 const T = {
   en: {
-    start: (n) => `👋 Hi${n ? ' ' + n : ''}! Blast is shutting down, and UI withdrawals close <b>Oct 26</b>.\n\nSend me any wallet address and I'll find what is still sitting on Blast: lending deposits, LP positions, staking, vaults, locks and bridge withdrawals you never finished.\n\n🔒 Read-only. I never ask you to connect a wallet, sign anything or share keys. Only send a public address.\n\nTry it: /example`,
-    send: 'Send me a wallet address (0x… 42 characters).',
+    start: (n) => `👋 Hi${n ? ' ' + n : ''}! Blast is shutting down, and UI withdrawals close <b>Oct 26</b>.\n\nJust paste a wallet address here, no command needed. I'll find what is still sitting on Blast: lending deposits, LP positions, staking, vaults, locks and bridge withdrawals you never finished.\n\n🔒 Read-only. I never ask you to connect a wallet, sign anything or share keys. Only send a public address.\n\nExample: /example · Українська: /lang`,
+    send: 'Just paste a wallet address (0x…, 42 characters), no command needed.',
     invalid: 'That does not look like a wallet address. It should start with 0x and have 40 hex characters.',
     queued: (n) => `⏳ You are #${n} in the queue, starting soon…`,
     scanning: '🔎 Scanning Blast…',
@@ -84,8 +84,8 @@ const T = {
     sharePrompt: (v) => `🎉 You found <b>${v}</b> on Blast. Help others check theirs before Oct 26, the button below opens a ready post (your address is not in it).`,
   },
   uk: {
-    start: (n) => `👋 Привіт${n ? ', ' + n : ''}! Blast закривається, вивід через UI працює до <b>26 жовтня</b>.\n\nНадішли мені адресу гаманця, і я знайду, що ще лежить на Blast: депозити в лендінгах, LP-позиції, стейкінг, волти, локи та незавершені виводи через міст.\n\n🔒 Тільки читання. Я ніколи не прошу підключати гаманець, щось підписувати чи давати ключі. Надсилай лише публічну адресу.\n\nСпробуй: /example`,
-    send: 'Надішли адресу гаманця (0x…, 42 символи).',
+    start: (n) => `👋 Привіт${n ? ', ' + n : ''}! Blast закривається, вивід через UI працює до <b>26 жовтня</b>.\n\nПросто встав сюди адресу гаманця, команда не потрібна. Я знайду, що ще лежить на Blast: депозити в лендінгах, LP-позиції, стейкінг, волти, локи та незавершені виводи через міст.\n\n🔒 Тільки читання. Я ніколи не прошу підключати гаманець, щось підписувати чи давати ключі. Надсилай лише публічну адресу.\n\nПриклад: /example · English: /lang`,
+    send: 'Просто встав адресу гаманця (0x…, 42 символи), команда не потрібна.',
     invalid: 'Це не схоже на адресу гаманця. Вона має починатися з 0x і мати 40 hex-символів.',
     queued: (n) => `⏳ Ти #${n} у черзі, зараз почну…`,
     scanning: '🔎 Сканую Blast…',
@@ -129,7 +129,7 @@ const LOG_UK = [
 const trLog = (lang, m) => { if (lang !== 'uk') return m; for (const [re, s] of LOG_UK) if (re.test(m)) return m.replace(re, s); return m; };
 
 const langs = new Map(); // chatId -> 'en' | 'uk'
-const langOf = (msg) => langs.get(msg.chat.id) || (/^(uk)/i.test(msg.from?.language_code || '') ? 'uk' : 'en');
+const langOf = (msg) => langs.get(msg.chat.id) || 'en';
 
 // ---------- formatting ----------
 const esc = (s) => String(s ?? '').replace(/[&<>]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;' }[c]));
@@ -250,14 +250,16 @@ function chunks(text, max = 3900) {
   return out;
 }
 
+function shareUrl(v) {
+  const text = `just found ${usd(v).replace('<', '')} I forgot on Blast before it shuts down 😳\n\ncheck yours before Oct 26, just paste your address:\nblast-leftovers.vercel.app\n\nh/t @NotYur`;
+  return 'https://x.com/intent/post?text=' + encodeURIComponent(text);
+}
+
 function buttons(r, lang) {
   const t = T[lang];
   const rows = [[{ text: t.full, url: `${SITE}/?a=${r.address}` }, { text: t.donate, callback_data: 'donate' }]];
   const v = shareAmount(r);
-  if (v >= SHARE_MIN_USD && r.address.toLowerCase() !== EXAMPLE) {
-    const text = `just found ${usd(v).replace('<', '')} I forgot on Blast before it shuts down 😳\n\ncheck yours before Oct 26, just paste your address:\nblast-leftovers.vercel.app\n\nh/t @NotYur`;
-    rows.push([{ text: t.share, url: 'https://x.com/intent/post?text=' + encodeURIComponent(text) }]);
-  }
+  if (v >= SHARE_MIN_USD && r.address.toLowerCase() !== EXAMPLE) rows.push([{ text: t.share, url: shareUrl(v) }]);
   rows.push([{ text: t.again, callback_data: 'rescan:' + r.address }]);
   return { inline_keyboard: rows };
 }
@@ -287,12 +289,14 @@ async function handleScan(chatId, address, lang) {
     const key = address.toLowerCase();
     let r = cache.get(key);
     if (!r || Date.now() - r.at > CACHE_MS) {
-      let last = 0;
+      let last = 0, finished = false, inFlight = Promise.resolve();
       const result = await enqueue(() => scan(address, (m) => {
-        if (Date.now() - last < 2500) return;
+        if (finished || Date.now() - last < 2500) return;
         last = Date.now();
-        tg('editMessageText', { chat_id: chatId, message_id: status.message_id, text: `${t.scanning}\n${trLog(lang, m)}` }).catch(() => {});
+        inFlight = tg('editMessageText', { chat_id: chatId, message_id: status.message_id, text: `${t.scanning}\n${trLog(lang, m)}` }).catch(() => {});
       }));
+      finished = true;
+      await inFlight; // a late "Done" edit would otherwise overwrite the report
       r = { at: Date.now(), result };
       cache.set(key, r);
     }
@@ -302,7 +306,9 @@ async function handleScan(chatId, address, lang) {
       await tg('sendMessage', { chat_id: chatId, text: parts[i], parse_mode: 'HTML', disable_web_page_preview: true, reply_markup: i === parts.length - 1 ? buttons(r.result, lang) : undefined });
     }
     const v = shareAmount(r.result);
-    if (v >= SHARE_MIN_USD && key !== EXAMPLE) await tg('sendMessage', { chat_id: chatId, text: t.sharePrompt(usd(v)), parse_mode: 'HTML' });
+    if (v >= SHARE_MIN_USD && key !== EXAMPLE) {
+      await tg('sendMessage', { chat_id: chatId, text: t.sharePrompt(usd(v)), parse_mode: 'HTML', reply_markup: { inline_keyboard: [[{ text: t.share, url: shareUrl(v) }]] } });
+    }
     stats.scans++;
   } catch (e) {
     console.error('scan error:', e.shortMessage || e.message);
@@ -349,7 +355,7 @@ async function onMessage(msg) {
 
 async function onCallback(q) {
   const chatId = q.message?.chat?.id;
-  const lang = langs.get(chatId) || (/^uk/i.test(q.from?.language_code || '') ? 'uk' : 'en');
+  const lang = langs.get(chatId) || 'en';
   await tg('answerCallbackQuery', { callback_query_id: q.id }).catch(() => {});
   if (!chatId) return;
   if (q.data === 'donate') return sendDonate(chatId, lang);
