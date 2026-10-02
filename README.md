@@ -1,6 +1,6 @@
 # Blast Leftovers
 
-Live: https://blast-leftovers.vercel.app
+Live: https://blast-leftovers.vercel.app · built by [@NotYur](https://x.com/NotYur)
 
 Made [for the love of the game](https://x.com/Skarly/status/2106037621499793494).
 
