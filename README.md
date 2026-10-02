@@ -34,7 +34,9 @@ Protocol links come only from DefiLlama data (`protocols.js`). For protocols who
 - `site/engine.js` — the scanner (works in the browser and in Node)
 - `site/labels.js` — known Blast contracts
 - `site/protocols.js` — protocol registry (URL, dead site, X account)
-- `site/donate.js` — donate address and live tally (`GOAL_USD` sets a goal bar)
+- `site/donate.js` — donate address and live tally. `GOAL_USD` adds a goal bar, `SPENT_USD` keeps already spent donations in the total
+- `site/donate-chains.js` — the 12 networks the tally reads (RPCs and exact token contracts)
+- `verify-donation-chains.mjs` — checks every RPC answers with the right chain id and every token's symbol/decimals: `node verify-donation-chains.mjs`
 - `site/vercel.json` — static hosting headers
 - `test.mjs` — console scan: `npm install` once, then `node test.mjs 0x...`
 

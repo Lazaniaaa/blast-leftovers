@@ -61,9 +61,12 @@ const T = {
     donateBtn: '💍 Donate', donateFooter: '💍 Support this tool',
     donateT: 'Found something? 🎉',
     donateText: '🙏 If this saved you some forgotten bags, tip the dev! 💍 Every donation goes toward buying one OCH Ringbearer 🧙‍♂️✨ (not set in stone: if it adds up to 2 or more, I’ll probably grab more 😏)',
-    evmNote: 'This is an EVM address: send ETH, USDC or USDT on Ethereum, Arbitrum, Base, Optimism, Blast or any other EVM chain. Double-check the address after pasting.',
+    evmNote: 'This is an EVM address. Send ETH, USDC or USDT on Ethereum, Base, BNB Chain, Arbitrum, Robinhood Chain, Monad, Polygon, Avalanche, Arc, Plasma, OP Mainnet or Blast. Double-check the address after pasting.',
     copyAddr: 'Copy address', seeCollection: 'OCH Ringbearer on OpenSea ↗', close: 'Close',
-    raised: 'Raised for the Ringbearer', donations: (n) => `${n} donation${n === 1 ? '' : 's'}`, tallyLoading: 'Counting donations…', tallyFail: 'Could not load the total right now.', goal: 'goal',
+    raised: 'Raised for the Ringbearer', tallyLoading: 'Checking 12 networks…', tallyFail: 'Could not load the total right now.', goal: 'goal',
+    spentOn: 'Already spent on the Ringbearer:',
+    tallyChecked: (n) => `Live balance of the donation wallet across ${n} networks.`,
+    tallyPartial: (ok, n, list) => `Checked ${ok} of ${n} networks. Not responding: ${list}. The real total may be higher.`,
     gSales: 'Token sales and launches', gSalesNote: 'Looks like you bought tokens or an allocation here: money went in and tokens came back (or were supposed to). This is not a deposit, so usually nothing can be withdrawn. If the status is "not claimed", check the contract for claim or refund.',
     saleChip: 'potential sale', paid: 'paid', refunded: 'refunded', got: 'received', nothingBack: 'no tokens received yet',
     saleSt: { claimed: 'claimed', unclaimed: 'not claimed?', unknown: 'status unknown' },
@@ -123,9 +126,12 @@ const T = {
     donateBtn: '💍 Донат', donateFooter: '💍 Підтримати проєкт',
     donateT: 'Знайшов щось? 🎉',
     donateText: '🙏 Якщо застосунок допоміг знайти забуті гроші, підкинь трохи розробнику! 💍 Усі донати підуть на покупку одного OCH Ringbearer 🧙‍♂️✨ (але це не точно: якщо збереться на 2 і більше, мабуть, куплю більше 😏)',
-    evmNote: 'Це EVM-адреса: можна надсилати ETH, USDC чи USDT в Ethereum, Arbitrum, Base, Optimism, Blast або будь-якій іншій EVM-мережі. Перевір адресу після вставки.',
+    evmNote: 'Це EVM-адреса. Можна надсилати ETH, USDC чи USDT в Ethereum, Base, BNB Chain, Arbitrum, Robinhood Chain, Monad, Polygon, Avalanche, Arc, Plasma, OP Mainnet чи Blast. Перевір адресу після вставки.',
     copyAddr: 'Скопіювати адресу', seeCollection: 'OCH Ringbearer на OpenSea ↗', close: 'Закрити',
-    raised: 'Зібрано на Ringbearer', donations: (n) => `донатів: ${n}`, tallyLoading: 'Рахую донати…', tallyFail: 'Зараз не вдалося завантажити суму.', goal: 'ціль',
+    raised: 'Зібрано на Ringbearer', tallyLoading: 'Перевіряю 12 мереж…', tallyFail: 'Зараз не вдалося завантажити суму.', goal: 'ціль',
+    spentOn: 'Вже витрачено на Ringbearer:',
+    tallyChecked: (n) => `Поточний баланс донат-гаманця в ${n} мережах.`,
+    tallyPartial: (ok, n, list) => `Перевірено ${ok} з ${n} мереж. Не відповіли: ${list}. Реальна сума може бути більшою.`,
     gSales: 'Сейли токенів і лончі', gSalesNote: 'Схоже, тут ти купував токени чи алокацію: гроші пішли, токени прийшли (або мали прийти). Це не депозит, тож зазвичай вивести нічого не можна. Якщо статус «не заклеймлено», перевір у контракті claim або refund.',
     saleChip: 'потенційно сейл', paid: 'сплачено', refunded: 'повернуто', got: 'отримано', nothingBack: 'токени ще не отримано',
     saleSt: { claimed: 'заклеймлено', unclaimed: 'не заклеймлено?', unknown: 'статус невідомий' },
@@ -464,7 +470,13 @@ function renderTally() {
   if (tally.error) { box.innerHTML = `<span class="small">${t('tallyFail')}</span>`; return; }
   const total = tally.total || 0;
   const bar = GOAL_USD ? `<div class="bar"><i style="width:${Math.min(100, (total / GOAL_USD) * 100).toFixed(1)}%"></i></div><span class="small">${t('goal')} ${fmtUsd(GOAL_USD)}</span>` : '';
-  box.innerHTML = `<span class="small">${t('raised')}</span><span class="big">${fmtUsd(total)}</span>${bar}<span class="small">${t('donations')(tally.count)}${tally.eth ? ` · ${tally.eth.toFixed(4)} ETH` : ''}${tally.usd ? ` · ${fmtUsd(tally.usd)} stables` : ''}</span>`;
+  const amt2 = (n) => n >= 1000 ? n.toLocaleString('en-US', { maximumFractionDigits: 0 }) : n >= 1 ? n.toLocaleString('en-US', { maximumFractionDigits: 3 }) : n.toPrecision(3);
+  const chains = (tally.perChain || []).map((c) => `<span class="small">${c.name}: ${c.items.map((x) => `${amt2(x.amount)} ${x.symbol}`).join(' + ')}${c.usd ? ` · ${fmtUsd(c.usd)}` : ''}</span>`).join('');
+  const spent = tally.spentUsd > 0 ? `<span class="small">${t('spentOn')} ${fmtUsd(tally.spentUsd)}</span>` : '';
+  const status = tally.failed?.length
+    ? `<span class="small" style="color:var(--warn)">${t('tallyPartial')(tally.checked, tally.chains, tally.failed.join(', '))}</span>`
+    : `<span class="small">${t('tallyChecked')(tally.chains)}</span>`;
+  box.innerHTML = `<span class="small">${t('raised')}</span><span class="big">${tally.failed?.length ? '≥ ' : ''}${fmtUsd(total)}</span>${bar}${chains}${spent}${status}`;
   ft.textContent = total > 0 ? fmtUsd(total) : '';
 }
 async function refreshTally() {

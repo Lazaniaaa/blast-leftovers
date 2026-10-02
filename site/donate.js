@@ -1,74 +1,92 @@
-// Donation button + live tally. Reads public explorers only; nothing is signed or sent from here.
+// Donation button + live tally. Reads balances straight from each chain's public RPC;
+// nothing is signed or sent from here.
+import { DONATION_CHAINS } from './donate-chains.js';
+
 export const DONATE_ADDRESS = '0x7413353216FbFa2dAa76b14fCfD766263Bb83400';
 export const COLLECTION_URL = 'https://opensea.io/collection/och-ringbearer';
 // Set a USD number to show a progress bar toward the goal, e.g. 1500.
 export const GOAL_USD = null;
+// After you spend donations (e.g. buy a Ringbearer), add the USD amount here so the total keeps counting it.
+export const SPENT_USD = 0;
 
-// Only native ETH and these exact token contracts count, so fake "USDC" airdrops cannot inflate the total.
-const CHAINS = [
-  { name: 'Ethereum', api: 'https://eth.blockscout.com/api', tokens: {
-    '0xa0b86991c6218b36c1d19d4a2e9eb0ce3606eb48': 'USD', '0xdac17f958d2ee523a2206206994597c13d831ec7': 'USD',
-    '0x6b175474e89094c44da98b954eedeac495271d0f': 'USD', '0xc02aaa39b223fe8d0a0e5c4f27ead9083c756cc2': 'ETH' } },
-  { name: 'Arbitrum', api: 'https://arbitrum.blockscout.com/api', tokens: {
-    '0xaf88d065e77c8cc2239327c5edb3a432268e5831': 'USD', '0xff970a61a04b1ca14834a43f5de4533ebddb5cc8': 'USD',
-    '0xfd086bc7cd5c481dcc9c85ebe478a1c0b69fcbb9': 'USD', '0x82af49447d8a07e3bd95bd0d56f35241523fbab1': 'ETH' } },
-  { name: 'Base', api: 'https://base.blockscout.com/api', tokens: {
-    '0x833589fcd6edb6e08f4c7c32d4f71b54bda02913': 'USD', '0x4200000000000000000000000000000000000006': 'ETH' } },
-  { name: 'Optimism', api: 'https://explorer.optimism.io/api', tokens: {
-    '0x0b2c639c533813f4aa9d7837caf62653d097ff85': 'USD', '0x94b008aa00579c1307b0ef2c499ad98a8ce58e58': 'USD',
-    '0x4200000000000000000000000000000000000006': 'ETH' } },
-  { name: 'Blast', api: 'https://api.routescan.io/v2/network/mainnet/evm/81457/etherscan/api', tokens: {
-    '0x4300000000000000000000000000000000000003': 'USD', '0x4300000000000000000000000000000000000004': 'ETH' } },
-];
+const CACHE_KEY = 'bl-donations-v2';
+const DUST_USD = 0.05; // ignore address-poisoning dust
 
-const me = DONATE_ADDRESS.toLowerCase();
-const CACHE_KEY = 'bl-donations';
+async function rpc(url, method, params) {
+  const r = await fetch(url, {
+    method: 'POST', headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ jsonrpc: '2.0', id: 1, method, params }), signal: AbortSignal.timeout(12000),
+  });
+  const j = await r.json();
+  if (j.error || j.result == null) throw new Error(j.error?.message || 'empty result');
+  return j.result;
+}
 
-async function list(api, action) {
-  for (let i = 0; i < 3; i++) {
-    const r = await fetch(`${api}?module=account&action=${action}&address=${DONATE_ADDRESS}&sort=asc`, { signal: AbortSignal.timeout(20000) }).catch(() => null);
-    if (r && r.ok) {
-      const j = await r.json();
-      if (Array.isArray(j.result)) return j.result;
-      if (!/rate|limit/i.test(String(j.result || j.message))) return [];
-    }
-    await new Promise((res) => setTimeout(res, 1500 * (i + 1)));
+const balanceOfData = '0x70a08231' + DONATE_ADDRESS.slice(2).toLowerCase().padStart(64, '0');
+const decimalsData = '0x313ce567';
+
+// One chain: native balance + each token's balance and decimals. Falls back to the next RPC on any error.
+async function readChain(ch) {
+  let lastErr;
+  for (const url of ch.rpc) {
+    try {
+      const chainId = parseInt(await rpc(url, 'eth_chainId', []), 16);
+      if (chainId !== ch.id) throw new Error('wrong chain ' + chainId);
+      const [native, ...tok] = await Promise.all([
+        rpc(url, 'eth_getBalance', [DONATE_ADDRESS, 'latest']),
+        ...ch.tokens.flatMap(([, addr]) => [
+          rpc(url, 'eth_call', [{ to: addr, data: balanceOfData }, 'latest']),
+          rpc(url, 'eth_call', [{ to: addr, data: decimalsData }, 'latest']),
+        ]),
+      ]);
+      const items = [{ symbol: ch.nativeSymbol, raw: BigInt(native), decimals: 18, price: ch.native }];
+      ch.tokens.forEach(([symbol, , price], i) => {
+        items.push({ symbol, raw: BigInt(tok[i * 2]), decimals: Number(BigInt(tok[i * 2 + 1])), price });
+      });
+      return items;
+    } catch (e) { lastErr = e; }
   }
-  throw new Error('explorer unavailable');
+  throw lastErr || new Error('no rpc');
 }
 
 export async function loadTally() {
   try {
     const c = JSON.parse(sessionStorage.getItem(CACHE_KEY) || 'null');
-    if (c && Date.now() - c.at < 5 * 60 * 1000) return c;
+    if (c && Date.now() - c.at < 3 * 60 * 1000) return c;
   } catch { /* storage optional */ }
-  let ethPrice = null;
+
+  const keys = [...new Set(DONATION_CHAINS.flatMap((c) => [c.native, ...c.tokens.map((t) => t[2])]).filter((k) => k !== 'usd'))];
+  let prices = {};
   try {
-    const p = await fetch('https://coins.llama.fi/prices/current/coingecko:ethereum').then((x) => x.json());
-    ethPrice = p.coins['coingecko:ethereum'].price;
-  } catch { /* price optional */ }
-  let eth = 0, usd = 0, count = 0, failed = 0;
-  await Promise.all(CHAINS.map(async (ch) => {
-    try {
-      const [txs, internal, tokens] = await Promise.all([list(ch.api, 'txlist'), list(ch.api, 'txlistinternal'), list(ch.api, 'tokentx')]);
-      for (const t of [...txs, ...internal]) {
-        if ((t.to || '').toLowerCase() !== me || t.isError === '1') continue;
-        const v = Number(t.value) / 1e18;
-        if (v > 0) { eth += v; count++; }
-      }
-      for (const t of tokens) {
-        if ((t.to || '').toLowerCase() !== me) continue;
-        const kind = ch.tokens[(t.contractAddress || '').toLowerCase()];
-        if (!kind) continue;
-        const v = Number(t.value) / 10 ** Number(t.tokenDecimal || 18);
-        if (v <= 0) continue;
-        if (kind === 'ETH') eth += v; else usd += v;
-        count++;
-      }
-    } catch { failed++; }
-  }));
-  const total = usd + (ethPrice ? eth * ethPrice : 0);
-  const res = { at: Date.now(), eth, usd, total, count, failed, priced: ethPrice != null };
+    const p = await fetch('https://coins.llama.fi/prices/current/' + keys.join(','), { signal: AbortSignal.timeout(12000) }).then((x) => x.json());
+    prices = Object.fromEntries(Object.entries(p.coins || {}).map(([k, v]) => [k, v.price]));
+  } catch { /* handled below: unpriced assets are listed without USD */ }
+  prices.usd = 1;
+
+  const results = await Promise.allSettled(DONATION_CHAINS.map(readChain));
+  const perChain = [], failed = [];
+  let balanceUsd = 0, unpriced = false;
+  results.forEach((res, i) => {
+    const ch = DONATION_CHAINS[i];
+    if (res.status !== 'fulfilled') { failed.push(ch.name); return; }
+    const items = [];
+    for (const it of res.value) {
+      if (it.raw === 0n) continue;
+      const amount = Number(it.raw) / 10 ** it.decimals;
+      const price = prices[it.price];
+      const usd = price != null ? amount * price : null;
+      if (usd != null && usd < DUST_USD) continue;
+      if (usd == null) unpriced = true;
+      items.push({ symbol: it.symbol, amount, usd });
+      balanceUsd += usd || 0;
+    }
+    if (items.length) perChain.push({ name: ch.name, items, usd: items.reduce((s, x) => s + (x.usd || 0), 0) });
+  });
+  perChain.sort((a, b) => b.usd - a.usd);
+  const res = {
+    at: Date.now(), balanceUsd, spentUsd: SPENT_USD, total: balanceUsd + SPENT_USD,
+    perChain, failed, unpriced, checked: DONATION_CHAINS.length - failed.length, chains: DONATION_CHAINS.length,
+  };
   try { sessionStorage.setItem(CACHE_KEY, JSON.stringify(res)); } catch { /* optional */ }
   return res;
 }
