@@ -1,6 +1,7 @@
 // Blast Leftovers Telegram bot: same scanner as the website, answers with a report.
 // Read-only: it never asks for keys or signatures. Run with `node bot/bot.mjs` (BOT_TOKEN in .env).
-import { readFileSync } from 'node:fs';
+import { readFileSync, writeFileSync, renameSync } from 'node:fs';
+import { createHash } from 'node:crypto';
 import { scan, ETH } from '../site/engine.js';
 import { resolveProtocol } from '../site/protocols.js';
 import { loadTally, DONATE_ADDRESS, COLLECTION_URL } from '../site/donate.js';
@@ -307,9 +308,14 @@ async function handleScan(chatId, address, lang) {
     }
     const v = shareAmount(r.result);
     if (v >= SHARE_MIN_USD && key !== EXAMPLE) {
+      stats.shares++;
       await tg('sendMessage', { chat_id: chatId, text: t.sharePrompt(usd(v)), parse_mode: 'HTML', reply_markup: { inline_keyboard: [[{ text: t.share, url: shareUrl(v) }]] } });
     }
     stats.scans++;
+    const foundNow = shareAmount(r.result);
+    if (foundNow >= 1 && key !== EXAMPLE) { stats.scansWithFinds++; stats.foundUsd += foundNow; }
+    saveStats();
+    console.log(`[${new Date().toLocaleTimeString()}] scan #${stats.scans}${key === EXAMPLE ? ' (example)' : foundNow >= 1 ? ` found ${usd(foundNow)}` : ''}`);
   } catch (e) {
     console.error('scan error:', e.shortMessage || e.message);
     await tg('editMessageText', { chat_id: chatId, message_id: status.message_id, text: t.failed(e.shortMessage || e.message) }).catch(() => {});
@@ -331,14 +337,57 @@ async function sendDonate(chatId, lang) {
   } catch { /* the address alone is enough */ }
 }
 
+// ---------- stats (no addresses, no usernames: only a salted hash of the Telegram id) ----------
+const OWNER_ID = Number(process.env.OWNER_ID || 0);
+const STATS_FILE = new URL('./stats.json', import.meta.url);
+const stats = (() => {
+  try { return JSON.parse(readFileSync(STATS_FILE, 'utf8')); } catch { return { users: {}, scans: 0, scansWithFinds: 0, foundUsd: 0, shares: 0, started: Date.now() }; }
+})();
+const idHash = (id) => createHash('sha256').update('blast-leftovers:' + id).digest('hex').slice(0, 16);
+let saveTimer = null;
+function saveStats() {
+  clearTimeout(saveTimer);
+  saveTimer = setTimeout(() => {
+    try { const tmp = new URL('./stats.json.tmp', import.meta.url); writeFileSync(tmp, JSON.stringify(stats)); renameSync(tmp, STATS_FILE); } catch (e) { console.error('stats save failed:', e.message); }
+  }, 1000);
+}
+function touchUser(from, lang) {
+  if (!from?.id) return;
+  const h = idHash(from.id);
+  const isNew = !stats.users[h];
+  stats.users[h] = { first: stats.users[h]?.first || Date.now(), last: Date.now(), lang };
+  saveStats();
+  if (isNew) {
+    const n = Object.keys(stats.users).length;
+    console.log(`[${new Date().toLocaleTimeString()}] new user #${n}`);
+    if (OWNER_ID && from.id !== OWNER_ID) tg('sendMessage', { chat_id: OWNER_ID, text: `👤 New user #${n}` }).catch(() => {});
+  }
+}
+function statsText() {
+  const users = Object.values(stats.users);
+  const day = Date.now() - 86400000;
+  return [
+    '📊 <b>Bot stats</b>',
+    `Users: <b>${users.length}</b> (new in 24h: ${users.filter((u) => u.first > day).length}, active in 24h: ${users.filter((u) => u.last > day).length})`,
+    `Scans: <b>${stats.scans}</b> (with something found: ${stats.scansWithFinds})`,
+    `Found for people: <b>${usd(stats.foundUsd) || '$0'}</b>`,
+    `Share prompts shown: ${stats.shares}`,
+    `Since: ${new Date(stats.started).toISOString().slice(0, 16).replace('T', ' ')} UTC`,
+  ].join('\n');
+}
+
 // ---------- updates ----------
-const stats = { users: new Set(), scans: 0 };
 async function onMessage(msg) {
   const chatId = msg.chat.id;
   const text = (msg.text || '').trim();
   const lang = langOf(msg);
   const t = T[lang];
-  stats.users.add(msg.from?.id);
+  touchUser(msg.from, lang);
+  if (/^\/stats\b/.test(text)) {
+    if (OWNER_ID && msg.from?.id === OWNER_ID) return tg('sendMessage', { chat_id: chatId, text: statsText(), parse_mode: 'HTML' });
+    if (!OWNER_ID) return tg('sendMessage', { chat_id: chatId, text: `Your Telegram id is ${msg.from?.id}. Add OWNER_ID=${msg.from?.id} to .env and restart the bot to unlock /stats.` });
+    return; // not the owner: stay silent
+  }
   if (/^\/start\b|^\/help\b/.test(text)) return tg('sendMessage', { chat_id: chatId, text: t.start(msg.from?.first_name ? esc(msg.from.first_name) : ''), parse_mode: 'HTML' });
   if (/^\/example\b/.test(text)) return handleScan(chatId, EXAMPLE, lang);
   if (/^\/donate\b/.test(text)) return sendDonate(chatId, lang);
@@ -388,7 +437,7 @@ async function setup() {
 async function main() {
   const me = await setup();
   console.log(`Bot @${me.username} is running. Press Ctrl+C to stop.`);
-  setInterval(() => console.log(`[stats] users: ${stats.users.size}, scans: ${stats.scans}, queue: ${queue.length}, running: ${running}`), 10 * 60 * 1000);
+  console.log(`Users so far: ${Object.keys(stats.users).length}, scans: ${stats.scans}. Owner /stats: ${OWNER_ID ? 'on' : 'off (send /stats to the bot to get your id)'}`);
   let offset = 0;
   for (;;) {
     try {

@@ -1,4 +1,6 @@
-node_modules/
-.vercel/
-.env*
 .claude/
+.env*
+.vercel/
+bot/stats.json
+bot/stats.json.tmp
+node_modules/
