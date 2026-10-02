@@ -40,6 +40,17 @@ Protocol links come only from DefiLlama data (`protocols.js`). For protocols who
 - `site/vercel.json` — static hosting headers
 - `test.mjs` — console scan: `npm install` once, then `node test.mjs 0x...`
 
+## Telegram bot
+
+Same scanner, answers in Telegram. Runs on your machine with long polling, no server needed.
+
+1. Create a bot with [@BotFather](https://t.me/BotFather) and copy its token.
+2. Create `.env` in this folder with `BOT_TOKEN=<your token>` (it is git-ignored).
+3. `npm install` once, then `npm run bot`.
+
+Preview a report in the console without Telegram: `npm run bot:preview -- 0x... uk`.
+Scans run at most 2 at a time and results are cached for 5 minutes, because every scan goes out from your IP.
+
 ## Run locally
 
 ```bash

@@ -1,14 +1,15 @@
 {
-  "name": "blast-checker",
+  "name": "blast-leftovers",
   "version": "1.0.0",
-  "description": "",
-  "main": "index.js",
+  "description": "Find what is still left on Blast: website + Telegram bot",
   "scripts": {
-    "test": "echo \"Error: no test specified\" && exit 1"
+    "bot": "node bot/bot.mjs",
+    "bot:preview": "node bot/bot.mjs --preview",
+    "scan": "node test.mjs"
   },
   "keywords": [],
   "author": "",
-  "license": "ISC",
+  "license": "MIT",
   "type": "module",
   "dependencies": {
     "viem": "^2.57.2"
