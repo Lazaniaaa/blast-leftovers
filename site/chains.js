@@ -45,7 +45,11 @@ export const CHAINS = {
     // Ethereum side of the ZK Stack bridge
     zk: { chainId: 2741n, l1Nullifier: '0xD7f9f54194C633F36CCD5F3da84ad4a1c38cB2cB' },
     // Abstract Global Wallet: smart account derived from the signer address
-    agw: { factory: '0x9B947df68D35281C972511B3E7BC875926f26C1A', registry: '0xd5E3efDA6bB5aB545cc2358796E96D9033496Dda' },
+    agw: {
+      factory: '0x9B947df68D35281C972511B3E7BC875926f26C1A', registry: '0xd5E3efDA6bB5aB545cc2358796E96D9033496Dda',
+      // delegate.xyz "linked wallets": ExclusiveDelegateResolver + AGW link rights (from the AGW SDK)
+      resolver: '0x0000000078CC4Cc1C14E27c0fa35ED6E5E58825D', linkRights: '0xc10dcfe266c1f71ef476efbd3223555750dc271e4115626b',
+    },
     example: null,
   },
 };

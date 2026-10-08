@@ -52,6 +52,9 @@ const T = {
     head: (n) => `${n} check`, found: (n) => `Found on ${n}`, inProto: 'in protocols', inWallet: 'in wallet', debt: 'debt', bridge: 'unfinished bridge',
     days: (name, label, d) => d > 0 ? `⏳ ${name} closes ${label} (${d} day${d === 1 ? '' : 's'} left)` : `⏳ ${name}: deadline passed`,
     agw: 'Abstract Global Wallet', signer: 'signer address', agwNote: (sg) => `Found automatically from the signer ${sg} you sent.`,
+    agwProbable: 'probably your Global Wallet', agwNoteLinked: (sg) => `Officially linked to ${sg}, the address you sent.`,
+    agwNoteProbable: (sg) => `Found from your transfers: ${sg} sent funds here and got funds back, so it is most likely yours. If not, ignore this report.`,
+    agwSuggest: 'You also sent funds to these Abstract Global Wallets. If one is yours, send it to me:',
     sBridgeNoteAbs: '"Ready to claim" means the batch is on Ethereum but nobody claimed the funds yet: claim them on the official migration page. "Waiting" means the batch is not on Ethereum yet (about 3 hours).',
     sBridge: '🌉 Unfinished bridge withdrawals', sBridgeNote: 'Started on Blast, never finalized on Ethereum. Finish them on the official bridge or the L1 portal contract.',
     sLend: '🏦 Lending, vaults, collateral', sLp: '💧 Liquidity', sStake: '🔒 Staked, locked, deposited', sWallet: '👛 Tokens in the wallet', sSales: '🎟 Token sales',
@@ -85,6 +88,9 @@ const T = {
     head: (n) => `Перевірка ${n}`, found: (n) => `Знайдено на ${n}`, inProto: 'у протоколах', inWallet: 'на гаманці', debt: 'борг', bridge: 'міст, не завершено',
     days: (name, label, d) => d > 0 ? `⏳ ${name} закривається ${label} (лишилось ${d} дн.)` : `⏳ ${name}: дедлайн минув`,
     agw: 'Abstract Global Wallet', signer: 'адреса signer', agwNote: (sg) => `Знайдено автоматично за адресою signer ${sg}, яку ти надіслав.`,
+    agwProbable: 'схоже, твій Global Wallet', agwNoteLinked: (sg) => `Офіційно прив’язаний до адреси ${sg}, яку ти надіслав.`,
+    agwNoteProbable: (sg) => `Знайдено за переказами: ${sg} надсилав сюди гроші й отримував назад, тож гаманець найімовірніше твій. Якщо ні, ігноруй цей звіт.`,
+    agwSuggest: 'Ти також надсилав гроші на ці Abstract Global Wallet. Якщо котрийсь твій, надішли його мені:',
     sBridgeNoteAbs: '«Можна заклеймити» означає, що батч уже в Ethereum, але кошти ніхто не забрав: заклейми їх на офіційній сторінці міграції. «Чекає Ethereum» означає, що батч ще не в Ethereum (близько 3 годин).',
     sBridge: '🌉 Незавершені виводи через міст', sBridgeNote: 'Почато на Blast, але не завершено в Ethereum. Заверши через офіційний міст або L1-контракт порталу.',
     sLend: '🏦 Лендінги, волти, застава', sLp: '💧 Ліквідність', sStake: '🔒 Стейкінг, локи, депозити', sWallet: '👛 Токени на гаманці', sSales: '🎟 Сейли токенів',
@@ -159,12 +165,14 @@ export function report(r, lang) {
   const L = [];
   const days = daysLeft(CUR);
   const label = new Date(CUR.deadline).toLocaleDateString(lang === 'uk' ? 'uk-UA' : 'en-US', { month: 'short', day: 'numeric', timeZone: 'UTC' });
-  const title = r.chain === 'abstract' && r.kind === 'agw' ? `${CUR.name} · ${t.agw}` : r.chain === 'abstract' && r.kind === 'eoa' && r.hasAgw ? `${CUR.name} · ${t.signer}` : CUR.name;
+  const agwKind = ['agw', 'agw-linked', 'agw-probable'].includes(r.kind);
+  const title = r.chain === 'abstract' && r.kind === 'agw-probable' ? `${CUR.name} · ${t.agwProbable}` : r.chain === 'abstract' && agwKind ? `${CUR.name} · ${t.agw}` : r.chain === 'abstract' && r.kind === 'eoa' && r.hasAgw ? `${CUR.name} · ${t.signer}` : CUR.name;
   const pendingBridge = r.bridge.filter((b) => b.status !== 'finalized');
   const depsGood = r.deposits.filter((d) => d.confidence !== 'low');
   const found = r.totals.wallet + r.totals.positions + r.totals.possible + r.totals.bridgePending;
   L.push(`🔎 <b>${esc(title)}</b> · <code>${esc(r.address)}</code>`);
-  if (r.kind === 'agw' && r.signer) L.push(`<i>${t.agwNote(short(r.signer))}</i>`);
+  if (agwKind && r.signer) L.push(`<i>${(r.kind === 'agw-probable' ? t.agwNoteProbable : r.kind === 'agw-linked' ? t.agwNoteLinked : t.agwNote)(short(r.signer))}</i>`);
+  if ((r.suggest || []).length) L.push(`<i>${t.agwSuggest}</i> ${r.suggest.map((s) => `<code>${s.address}</code>`).join(', ')}`);
   L.push(`💰 ${t.found(CUR.name)}: <b>${usd(found)}</b>`);
   const parts = [`${t.inProto} ${usd(r.totals.positions + r.totals.possible)}`, `${t.inWallet} ${usd(r.totals.wallet)}`];
   if (r.totals.debt > 0) parts.push(`${t.debt} −${usd(r.totals.debt)}`);
@@ -298,30 +306,31 @@ async function handleScan(chatId, address, lang) {
   try {
     // Blast: the address itself. Abstract: its Global Wallet (if any) plus the address itself.
     const ws = await abstractWallets(address).catch(() => [{ address, kind: 'eoa' }]);
-    const jobs = [{ chain: 'blast', address, kind: 'eoa' }, ...ws.map((w) => ({ chain: 'abstract', address: w.address, kind: w.kind, signer: w.signer }))];
+    const suggest = ws.filter((w) => w.scan === false);
+    const jobs = [{ chain: 'blast', address, kind: 'eoa' }, ...ws.filter((w) => w.scan !== false).map((w) => ({ chain: 'abstract', address: w.address, kind: w.kind, signer: w.signer, suggest: w.kind === 'eoa' ? suggest : undefined }))];
     let last = 0, finished = false, inFlight = Promise.resolve();
     const lines = {};
     const results = await Promise.all(jobs.map((j) => {
-      const tag = j.chain === 'abstract' && ws.length > 1 ? `Abstract (${j.kind === 'agw' ? 'AGW' : 'signer'})` : CHAINS[j.chain].name;
+      const tag = j.chain === 'abstract' && jobs.filter((x) => x.chain === 'abstract').length > 1 ? `Abstract (${j.kind === 'eoa' ? 'signer' : 'AGW'})` : CHAINS[j.chain].name;
       return scanCached(j.address, j.chain, (m) => {
         lines[tag] = trLog(lang, m);
         if (finished || Date.now() - last < 2500) return;
         last = Date.now();
         inFlight = tg('editMessageText', { chat_id: chatId, message_id: status.message_id, text: `${t.scanning}\n${Object.entries(lines).map(([k, v]) => k + ': ' + v).join('\n')}` }).catch(() => {});
-      }).then((r) => ({ ...r, kind: j.kind, signer: j.signer })).catch((e) => ({ error: e, chain: j.chain, address: j.address }));
+      }).then((r) => ({ ...r, kind: j.kind, signer: j.signer, suggest: j.suggest })).catch((e) => ({ error: e, chain: j.chain, address: j.address }));
     }));
     finished = true;
     await inFlight; // a late progress edit would otherwise overwrite the report
     const ok = results.filter((r) => !r.error);
-    const agwFound = ok.some((r) => r.chain === 'abstract' && r.kind === 'agw');
+    const agwFound = ok.some((r) => r.chain === 'abstract' && ['agw', 'agw-linked', 'agw-probable'].includes(r.kind));
     ok.forEach((r) => { if (r.chain === 'abstract' && r.kind === 'eoa') r.hasAgw = agwFound; });
     const isEmpty = (r) => !r.wallet.some((w) => (w.usd || 0) >= 0.01) && !r.vaults.length && !r.lp.length && !r.nftPositions.length && !r.locks.length
       && !r.deposits.some((d) => d.confidence !== 'low') && !r.bridge.some((b) => b.status !== 'finalized') && !r.debts.length;
     // the signer of an AGW is reported only when it holds something itself
-    const shown = ok.filter((r) => !(r.hasAgw && isEmpty(r)));
+    const shown = ok.filter((r) => !(r.hasAgw && isEmpty(r) && !(r.suggest || []).length));
     const messages = [];
     for (const r of shown) {
-      if (isEmpty(r)) messages.push(`🔎 <b>${esc(CHAINS[r.chain].name)}</b>: ${t.nothing(CHAINS[r.chain].name)}`);
+      if (isEmpty(r) && !(r.suggest || []).length) messages.push(`🔎 <b>${esc(CHAINS[r.chain].name)}</b>: ${t.nothing(CHAINS[r.chain].name)}`);
       else messages.push(...chunks(report(r, lang)));
     }
     for (const e of results.filter((r) => r.error)) messages.push(t.failed(`${CHAINS[e.chain].name}: ${e.error.shortMessage || e.error.message}`));

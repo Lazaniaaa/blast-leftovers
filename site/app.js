@@ -19,9 +19,12 @@ const T = {
     deadline: (name, label, d) => d > 0 ? `${name} closes ${label} · ${d} day${d === 1 ? '' : 's'}` : `${name}: deadline passed`,
     closes: (label, d) => d > 0 ? `closes ${label} · ${d}d left` : 'deadline passed',
     chainAll: 'All chains', agwLookup: 'looking for your Abstract Global Wallet…',
-    agwHead: 'Abstract Global Wallet', signerHead: 'signer address',
+    agwHead: 'Abstract Global Wallet', signerHead: 'signer address', agwProbableHead: 'probably your Global Wallet',
+    agwNoteLinked: (s) => `This smart wallet is officially linked to ${s}, the address you pasted.`,
+    agwNoteProbable: (s) => `Found from your transfers: ${s} sent funds to this smart wallet and got funds back from it, so it is most likely yours. If it is not, ignore this block.`,
+    agwSuggest: 'You also sent funds to these Abstract Global Wallets. If one is yours, scan it:',
     agwNote: (s) => `Found automatically: this smart wallet belongs to the signer ${s} you pasted.`,
-    foundAll: 'Found on all chains', bridgeDone: (n) => `${n} bridge withdrawal(s) already finalized.`,
+    foundAll: 'Found in total', bridgeDone: (n) => `${n} bridge withdrawal(s) already finalized.`,
     gBridgeNoteAbs: 'You started these withdrawals to Ethereum. "Ready to claim" means the batch is on Ethereum but nobody claimed the funds yet: claim them through the official migration page. "Waiting" means the batch is not on Ethereum yet (usually about 3 hours).',
     gWalletNoteAbs: 'Plain balances. Swap or bridge them out before Dec 15. Tokens that exist only on Abstract can be sold only while the chain runs.',
     gNftNoteAbs: 'NFTs on Abstract cannot be bridged in general. Whether a collection moves depends on its project; check their announcements.',
@@ -98,9 +101,12 @@ const T = {
     deadline: (name, label, d) => d > 0 ? `${name} закривається ${label} · ${d} дн.` : `${name}: дедлайн минув`,
     closes: (label, d) => d > 0 ? `закривається ${label} · лишилось ${d} дн.` : 'дедлайн минув',
     chainAll: 'Усі мережі', agwLookup: 'шукаю твій Abstract Global Wallet…',
-    agwHead: 'Abstract Global Wallet', signerHead: 'адреса signer',
+    agwHead: 'Abstract Global Wallet', signerHead: 'адреса signer', agwProbableHead: 'схоже, твій Global Wallet',
+    agwNoteLinked: (s) => `Цей смарт-гаманець офіційно прив’язаний до адреси ${s}, яку ти вставив.`,
+    agwNoteProbable: (s) => `Знайдено за переказами: ${s} надсилав гроші на цей смарт-гаманець і отримував їх назад, тож він найімовірніше твій. Якщо ні, просто ігноруй цей блок.`,
+    agwSuggest: 'Ти також надсилав гроші на ці Abstract Global Wallet. Якщо котрийсь твій, перевір його:',
     agwNote: (s) => `Знайдено автоматично: цей смарт-гаманець належить signer-адресі ${s}, яку ти вставив.`,
-    foundAll: 'Знайдено в усіх мережах', bridgeDone: (n) => `Уже завершених виводів через міст: ${n}.`,
+    foundAll: 'Знайдено разом', bridgeDone: (n) => `Уже завершених виводів через міст: ${n}.`,
     gBridgeNoteAbs: 'Ти почав ці виводи в Ethereum. «Можна заклеймити» означає, що батч уже в Ethereum, але кошти ніхто не забрав: заклейми їх через офіційну сторінку міграції. «Чекає Ethereum» означає, що батч ще не в Ethereum (зазвичай близько 3 годин).',
     gWalletNoteAbs: 'Звичайні баланси. Обміняй або виведи їх до 15 грудня. Токени, що існують лише на Abstract, можна продати тільки поки мережа працює.',
     gNftNoteAbs: 'NFT з Abstract загалом не переносяться мостом. Чи переїде колекція, вирішує її проєкт: дивись їхні анонси.',
@@ -278,9 +284,11 @@ const isEmpty = (r) => {
   return !r.wallet.length && !r.vaults.length && !r.lp.length && !r.nftPositions.length && !r.locks.length && !depsGood.length && !r.bridge.some((b) => b.status !== 'finalized') && !r.debts.length;
 };
 
+const isAgwKind = (k) => k === 'agw' || k === 'agw-linked' || k === 'agw-probable';
 function blockTitle(r) {
   const c = CHAINS[r.chain];
-  if (r.chain === 'abstract' && r.kind === 'agw') return `${c.name} · ${t('agwHead')}`;
+  if (r.chain === 'abstract' && r.kind === 'agw-probable') return `${c.name} · ${t('agwProbableHead')}`;
+  if (r.chain === 'abstract' && isAgwKind(r.kind)) return `${c.name} · ${t('agwHead')}`;
   if (r.chain === 'abstract' && r.kind === 'eoa' && r.hasAgw) return `${c.name} · ${t('signerHead')}`;
   return c.name;
 }
@@ -289,9 +297,9 @@ function renderAll(results) {
   lastResults = results;
   const blocks = results.filter((r) => !r.error).map(trimDust);
   // the signer of an Abstract Global Wallet is shown only when it holds something itself
-  const agwFound = blocks.some((r) => r.chain === 'abstract' && r.kind === 'agw');
+  const agwFound = blocks.some((r) => r.chain === 'abstract' && isAgwKind(r.kind));
   blocks.forEach((r) => { if (r.chain === 'abstract' && r.kind === 'eoa') r.hasAgw = agwFound; });
-  const visible = blocks.filter((r) => !(r.hasAgw && isEmpty(r)));
+  const visible = blocks.filter((r) => !(r.hasAgw && isEmpty(r) && !(r.suggest || []).length));
   const input = results[0]?.input || results[0]?.address;
   const total = visible.reduce((s, r) => s + foundOf(r), 0);
   const share = shareAmountAll(results);
@@ -344,7 +352,7 @@ function renderBlock(r, idx, multi) {
   const positions = r.totals.positions + r.totals.possible;
   const likely = r.totals.likely || 0;
   const days = Math.ceil((new Date(CUR.deadline) - Date.now()) / 86400000);
-  const quiet = isEmpty(r) && !r.nfts.length && !r.unknown.length && !(r.sales || []).length && !depsLow.length && !r.bridge.length;
+  const quiet = isEmpty(r) && !r.nfts.length && !r.unknown.length && !(r.sales || []).length && !depsLow.length && !r.bridge.length && !(r.suggest || []).length;
   if (quiet) {
     return `<section class="chain-block" id="chain-${idx}"><div class="chain-head"><h2>${esc(blockTitle(r))}</h2>
       <span class="chip ${days <= 7 ? 'crit' : 'warn'}">${t('closes')(dl(CUR), days)}</span></div>
@@ -358,7 +366,8 @@ function renderBlock(r, idx, multi) {
     </div>
     <div class="addr-line"><span class="addr small-addr">${esc(r.address)}</span>
       <span class="ext"><a href="${scanAddr(r.address)}" target="_blank" rel="noopener noreferrer">${CUR.explorerName} ↗</a></span></div>
-    ${r.kind === 'agw' && r.signer ? `<p class="group-note">${t('agwNote')(short(r.signer))}</p>` : ''}
+    ${isAgwKind(r.kind) && r.signer ? `<p class="group-note">${t(r.kind === 'agw-probable' ? 'agwNoteProbable' : r.kind === 'agw-linked' ? 'agwNoteLinked' : 'agwNote')(short(r.signer))}</p>` : ''}
+    ${(r.suggest || []).length ? `<p class="group-note">${t('agwSuggest')} ${r.suggest.map((s) => `<a href="?a=${s.address}&chain=abstract">${short(s.address)}</a>`).join(', ')}</p>` : ''}
     <div class="figures">
       ${multi ? '' : ''}
       <div class="fig"><span class="k">${t('positions')}</span><span class="v">${usdPlain(positions)}</span></div>
@@ -694,13 +703,14 @@ async function run(address) {
     if (chainSel !== 'blast') {
       lines.Abstract = t('agwLookup'); show();
       const ws = await abstractWallets(address).catch(() => [{ address, kind: 'eoa' }]);
-      ws.forEach((w) => jobs.push({ chain: 'abstract', address: w.address, kind: w.kind, signer: w.signer }));
+      const suggest = ws.filter((w) => w.scan === false);
+      ws.filter((w) => w.scan !== false).forEach((w) => jobs.push({ chain: 'abstract', address: w.address, kind: w.kind, signer: w.signer, suggest: w.kind === 'eoa' ? suggest : undefined }));
       delete lines.Abstract;
     }
     const results = await Promise.all(jobs.map((j) => {
-      const tag = j.chain === 'abstract' && jobs.filter((x) => x.chain === 'abstract').length > 1 ? `Abstract (${j.kind === 'agw' ? 'AGW' : 'signer'})` : CHAINS[j.chain].name;
+      const tag = j.chain === 'abstract' && jobs.filter((x) => x.chain === 'abstract').length > 1 ? `Abstract (${j.kind === 'eoa' ? 'signer' : 'AGW'})` : CHAINS[j.chain].name;
       return scan(j.address, (m) => { lines[tag] = m; show(); }, { chain: j.chain })
-        .then((r) => ({ ...r, kind: j.kind, signer: j.signer, input: address }))
+        .then((r) => ({ ...r, kind: j.kind, signer: j.signer, suggest: j.suggest, input: address }))
         .catch((e) => { console.error(e); return { error: e, chain: j.chain, address: j.address, kind: j.kind, input: address }; });
     }));
     status.innerHTML = '';

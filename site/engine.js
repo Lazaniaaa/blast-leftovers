@@ -111,6 +111,7 @@ const A = {
   zkNullifier: parseAbi(['function isWithdrawalFinalized(uint256 chainId, uint256 l2BatchNumber, uint256 l2MessageIndex) view returns (bool)']),
   agwRegistry: parseAbi(['function isAGW(address) view returns (bool)']),
   agwFactory: parseAbi(['function getAddressForSalt(bytes32) view returns (address)']),
+  agwResolver: parseAbi(['function exclusiveWalletByRights(address vault, bytes24 rights) view returns (address)']),
   portal: parseAbi([
     'function finalizedWithdrawals(bytes32) view returns (bool)',
     'function provenWithdrawals(bytes32) view returns (bytes32 outputRoot, uint128 timestamp, uint128 l2OutputIndex, uint256 requestId)',
@@ -1078,23 +1079,52 @@ export async function scan(input, log = () => {}, opts = {}) {
   return createScanner(chain).scan(input, log);
 }
 
-// Abstract users mostly hold funds in an Abstract Global Wallet (a smart account derived from their signer).
-// Given any address, return the addresses worth scanning on Abstract.
+// Abstract users mostly hold funds in an Abstract Global Wallet (a smart account). Given any address, return
+// the addresses worth scanning on Abstract, strongest evidence first:
+//   agw          the address itself is an AGW, or the AGW whose initial signer is this address
+//   agw-linked   AGW officially linked to this address (delegate.xyz "linked wallets")
+//   agw-probable AGW this address sent funds to AND received funds from (same owner, almost always)
+//   agw-funded   AGW this address only sent funds to: returned with scan:false, shown as a suggestion
 export async function abstractWallets(input) {
   if (!isAddress(input)) throw new Error('Invalid address');
   const chain = CHAINS.abstract;
   const c = createPublicClient({ chain: chain.viemChain, transport: http(chain.rpc[0]) });
   const addr = getAddress(input);
   const code = await c.getCode({ address: addr }).catch(() => null);
-  const isContract = !!(code && code !== '0x');
-  if (isContract) {
+  if (code && code !== '0x') {
     const isAgw = await c.readContract({ address: chain.agw.registry, abi: A.agwRegistry, functionName: 'isAGW', args: [addr] }).catch(() => false);
     return [{ address: addr, kind: isAgw ? 'agw' : 'contract' }];
   }
-  const agw = await c.readContract({ address: chain.agw.factory, abi: A.agwFactory, functionName: 'getAddressForSalt', args: [keccak256(addr)] }).catch(() => null);
-  const agwCode = agw ? await c.getCode({ address: agw }).catch(() => null) : null;
+  const lc = (x) => (x || '').toLowerCase();
   const out = [];
-  if (agw && agwCode && agwCode !== '0x') out.push({ address: getAddress(agw), kind: 'agw', signer: addr });
+  const seen = new Set([lc(addr)]);
+  const push = (a, kind, extra = {}) => { if (a && !seen.has(lc(a))) { seen.add(lc(a)); out.push({ address: getAddress(a), kind, signer: addr, ...extra }); } };
+  const deployed = async (a) => { const cd = await c.getCode({ address: a }).catch(() => null); return !!(cd && cd !== '0x'); };
+
+  // 1. initial signer
+  const derived = await c.readContract({ address: chain.agw.factory, abi: A.agwFactory, functionName: 'getAddressForSalt', args: [keccak256(addr)] }).catch(() => null);
+  if (derived && await deployed(derived)) push(derived, 'agw');
+  // 2. official link
+  const linked = await c.readContract({ address: chain.agw.resolver, abi: A.agwResolver, functionName: 'exclusiveWalletByRights', args: [addr, chain.agw.linkRights] }).catch(() => null);
+  if (linked && lc(linked) !== lc(addr)) push(linked, 'agw-linked');
+  // 3. money flows with AGWs (explorer history, newest 1000 rows of each kind)
+  try {
+    const q = (action) => fetch(`${chain.explorerApi}?module=account&action=${action}&address=${addr}&page=1&offset=1000&sort=desc`).then((r) => r.json()).then((j) => (Array.isArray(j.result) ? j.result : [])).catch(() => []);
+    const [txs, toks] = await Promise.all([q('txlist'), q('tokentx')]);
+    const flow = {};
+    for (const t of [...txs.filter((x) => BigInt(x.value || 0) > 0n && x.isError !== '1'), ...toks]) {
+      const from = lc(t.from), to = lc(t.to);
+      if (from === lc(addr) && to) (flow[to] ??= { out: 0, in: 0 }).out++;
+      if (to === lc(addr) && from) (flow[from] ??= { out: 0, in: 0 }).in++;
+    }
+    const cps = Object.keys(flow).filter((a) => !seen.has(a) && flow[a].out > 0).sort((x, y) => (flow[y].out + flow[y].in) - (flow[x].out + flow[x].in)).slice(0, 15);
+    const flags = await Promise.all(cps.map((a) => c.readContract({ address: chain.agw.registry, abi: A.agwRegistry, functionName: 'isAGW', args: [a] }).catch(() => false)));
+    cps.forEach((a, i) => {
+      if (flags[i] !== true) return;
+      if (flow[a].in > 0) push(a, 'agw-probable');
+      else push(a, 'agw-funded', { scan: false });
+    });
+  } catch { /* history is optional here */ }
   out.push({ address: addr, kind: 'eoa' });
   return out;
 }
