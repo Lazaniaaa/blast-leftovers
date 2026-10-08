@@ -1,4 +1,4 @@
-// Chains the donation tally reads (top EVM chains by TVL on DefiLlama, Oct 2026, plus Robinhood and Blast).
+// Chains the donation tally reads (top EVM chains by TVL on DefiLlama, Oct 2026, plus Robinhood, Blast and Abstract).
 // `native` is the coin price key on DefiLlama; tokens are exact contract addresses, verified on-chain
 // (symbol + decimals), so look-alike airdrops can never be counted.
 export const DONATION_CHAINS = [
@@ -27,4 +27,6 @@ export const DONATION_CHAINS = [
     tokens: [['USDC', '0x0b2c639c533813f4aa9d7837caf62653d097ff85', 'usd'], ['USDT', '0x94b008aa00579c1307b0ef2c499ad98a8ce58e58', 'usd'], ['WETH', '0x4200000000000000000000000000000000000006', 'coingecko:ethereum']] },
   { id: 81457, name: 'Blast', rpc: ['https://rpc.blast.io', 'https://blast-rpc.publicnode.com'], native: 'coingecko:ethereum', nativeSymbol: 'ETH',
     tokens: [['USDB', '0x4300000000000000000000000000000000000003', 'usd'], ['WETH', '0x4300000000000000000000000000000000000004', 'coingecko:ethereum']] },
+  { id: 2741, name: 'Abstract', rpc: ['https://api.mainnet.abs.xyz'], native: 'coingecko:ethereum', nativeSymbol: 'ETH',
+    tokens: [['USDC.e', '0x84a71ccd554cc1b02749b35d22f684cc8ec987e1', 'usd'], ['USDT', '0x0709f39376deee2a2dfc94a58edeb2eb9df012bd', 'usd'], ['WETH', '0x3439153eb7af838ad19d56e1571fbd09333c2809', 'coingecko:ethereum']] },
 ];

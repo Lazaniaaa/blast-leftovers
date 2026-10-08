@@ -4,7 +4,8 @@
 export const PROTOCOLS = {
   pac: { name: 'Pac Finance', slug: 'pac-finance', url: null, dead: true, x: 'pac_finance', kw: ['pac finance', 'pac '] },
   orbit: { name: 'Orbit Protocol', slug: 'orbit-protocol', url: null, dead: true, x: 'OrbitLending', kw: ['orbit'] },
-  zerolend: { name: 'ZeroLend', slug: 'zerolend-lending', url: 'https://zerolend.xyz/', x: 'zerolendxyz', kw: ['zerolend', 'z0'] },
+  // DefiLlama marks the Abstract deployment as insolvent: withdrawals there may fail
+  zerolend: { name: 'ZeroLend', slug: 'zerolend-lending', url: 'https://zerolend.xyz/', x: 'zerolendxyz', kw: ['zerolend', 'z0'], insolvent: ['abstract'] },
   init: { name: 'INIT Capital', slug: 'init-capital', url: 'https://app.init.capital', x: 'InitCapital_', kw: ['init capital', 'init '] },
   juice: { name: 'Juice Finance', slug: 'juice-finance', url: 'https://juice.finance', x: 'Juice_Finance', kw: ['juice'] },
   thruster: { name: 'Thruster', slug: 'thruster-v3', url: null, dead: true, x: 'ThrusterFi', kw: ['thruster', 't-lp'] },
@@ -43,6 +44,20 @@ export const PROTOCOLS = {
   blast: { name: 'Blast', slug: null, url: 'https://blast.io', x: 'blast', kw: ['nr wrapper', 'nreth', 'nrusdb'] },
   sablier: { name: 'Sablier', slug: 'sablier-lockup', url: 'https://sablier.com/', x: 'Sablier', kw: ['sablier'] },
   parallel: { name: 'Parallel (Aave fork)', slug: null, url: null, x: null, kw: ['parallel'] },
+  // ---- Abstract ----
+  abstract: { name: 'Abstract', slug: null, url: 'https://migrate.abs.xyz', x: 'AbstractChain', kw: ['abstract ·', 'abstract global wallet'] },
+  sakura: { name: 'SakuraSwap', slug: 'sakuraswap-clmm', url: 'https://sakuraswap.com/', x: 'protofire', kw: ['sakura', 'reservoir'] },
+  aborean: { name: 'Aborean', slug: 'aborean-cl', url: 'https://aborean.finance', x: 'AboreanFi', kw: ['aborean'] },
+  kona: { name: 'Kona', slug: 'kona-lend', url: 'https://kona.surf/', x: 'KonaDeFi', kw: ['kona', 'kittypunch'] },
+  noxa: { name: 'NOXA', slug: 'noxa-dex-v2', url: 'https://fun.noxa.eth.limo/', x: 'Noxa_Fi', kw: ['noxa'] },
+  myriad: { name: 'Myriad Markets', slug: 'myriad-markets', url: 'https://myriad.markets/markets', x: 'MyriadMarkets', kw: ['myriad'] },
+  deathfun: { name: 'death.fun', slug: 'death.fun', url: 'https://death.fun', x: 'deathfungame', kw: ['death.fun', 'deathfun'] },
+  witty: { name: 'Witty', slug: 'witty', url: 'https://www.witty.game/', x: 'play_witty', kw: ['witty'] },
+  amigo: { name: 'Amigo', slug: 'amigo', url: 'https://amigo.cool/', x: 'TryAmigoApp', kw: ['amigo'] },
+  zoofun: { name: 'ZOO.FUN', slug: 'zoo.fun', url: null, dead: true, x: 'zoodotfun', kw: ['zoo.fun', 'zoofun'] },
+  mondrian: { name: 'Mondrian Swap', slug: 'mondrian-swap', url: null, dead: true, x: 'MondrianSwap', kw: ['mondrian'] },
+  morpho: { name: 'Morpho', slug: 'morpho-blue', url: 'https://app.morpho.org', x: 'Morpho', kw: ['morpho'] },
+  logx: { name: 'LogX', slug: 'logx-v2', url: 'https://logx.network/', x: 'LogX_trade', kw: ['logx'] },
 };
 
 // Texts are tried in priority order (explicit protocol label first, token name last),

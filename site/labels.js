@@ -122,6 +122,36 @@ export const BRIDGES = new Set([
   '0x4200000000000000000000000000000000000014',
 ]);
 
+// Abstract (chain 2741). Sources: zks_getBridgeContracts, Abstract Global Wallet SDK, DefiLlama registries.
+export const LABELS_ABSTRACT = {
+  '0x000000000000000000000000000000000000800a': 'Abstract · ETH (system contract)',
+  '0x0000000000000000000000000000000000010003': 'Abstract · Native bridge',
+  '0x954ba8223a6bfec1cc3867139243a02ba0bc66e4': 'Abstract · Native bridge (legacy)',
+  '0x9b947df68d35281c972511b3e7bc875926f26c1a': 'Abstract Global Wallet · factory',
+  '0xd5e3efda6bb5ab545cc2358796e96d9033496dda': 'Abstract Global Wallet · registry',
+  '0x3439153eb7af838ad19d56e1571fbd09333c2809': 'WETH',
+  '0x84a71ccd554cc1b02749b35d22f684cc8ec987e1': 'USDC.e',
+  '0x0709f39376deee2a2dfc94a58edeb2eb9df012bd': 'USDT',
+  '0x9ebe3a824ca958e4b3da772d2065518f009cba62': 'PENGU',
+  '0x566d7510dee58360a64c9827257cf6d0dc43985e': 'SakuraSwap · AMM factory',
+  '0xa1160e73b63f322ae88cc2d8e700833e71d0b2a1': 'SakuraSwap · CLMM factory',
+  '0xf6cdfff7ad51caad860e7a35d6d4075d74039a6b': 'Aborean · AMM factory',
+  '0x8cfe21f272fdfddf42851f6282c0f998756eef27': 'Aborean · CL factory',
+  '0x7c2e370ca0fcb60d8202b8c5b01f758bcad41860': 'Kona · V2 factory',
+  '0xfed3612d6865ca46f080f19fc34aa8cac0c92cf6': 'Kona · V3 factory',
+  '0x288e195322088e615460ccaa0fe0a862c9e06412': 'Kona · Stableswap factory',
+  '0x9f9f76660d17f76f63a32f6d4920b282d3856f3f': 'Kona · Twocrypto factory',
+  '0xa44965ebbcb73163eb838dc4dfa85f56b04804a6': 'Kona · Tricrypto factory',
+  '0xe1e98623082f662bca1009a05382758f86f133b3': 'NOXA · DEX factory',
+  '0x0b4429576e5ed44a1b8f676c8217eb45707afa3d': 'Witty · Arcade',
+  '0x4b48f3d1ddc9e5793d4817517255e6bef6d72a7c': 'Amigo · Router',
+  '0x8eeae4dd40ebee7bb6471c47d4d867539cf53ccf': 'ZeroLend · Data provider',
+};
+const BY_CHAIN = { blast: LABELS, abstract: LABELS_ABSTRACT };
+
+export function labelFor(addr, chainKey = 'blast') {
+  return addr ? (BY_CHAIN[chainKey] || {})[addr.toLowerCase()] : undefined;
+}
 export function label(addr) {
-  return addr ? LABELS[addr.toLowerCase()] : undefined;
+  return labelFor(addr, 'blast');
 }

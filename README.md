@@ -1,11 +1,25 @@
 # Blast Leftovers
 
+Find what you still have on **Blast** (closes Oct 26, 2026) and **Abstract** (closes Dec 15, 2026).
+
 Live: https://blast-leftovers.vercel.app · built by [@NotYur](https://x.com/NotYur)
 
 Made [for the love of the game](https://x.com/Skarly/status/2106037621499793494).
 
 Paste an address and see what is still left on Blast before the shutdown (UI withdrawals close Oct 26, 2026).
 No wallet connection. Everything runs in the browser and only reads data.
+
+## Chains
+
+All chain-specific settings live in `site/chains.js`: RPCs, explorer API, Multicall3, bridge contracts, deadline.
+Every scan runs in its own closure, so scans of different chains can run in parallel.
+
+- **Blast** (OP Stack): history from Routescan, withdrawals checked in the Blast OptimismPortal on Ethereum (proven / finalized).
+- **Abstract** (ZK Stack): history from the Abstract block explorer API (`block-explorer-api.mainnet.abs.xyz`, 1000 rows per call),
+  withdrawals checked through `zks_getL2ToL1LogProof` + `L1Nullifier.isWithdrawalFinalized` on Ethereum
+  (waiting for the batch / ready to claim / claimed). An address pasted on Abstract is resolved to its
+  **Abstract Global Wallet** (`AccountFactory.getAddressForSalt(keccak256(signer))`) and both are scanned.
+  ZeroLend on Abstract is flagged as insolvent (DefiLlama). NFTs and in-game balances are not valued.
 
 ## What it checks
 

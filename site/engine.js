@@ -1,17 +1,12 @@
-// Blast position scanner. Read-only: needs only an address, never a wallet connection.
+// Multi-chain position scanner (Blast, Abstract). Read-only: needs only an address, never a wallet connection.
 // Works in the browser (via import map for "viem") and in Node 18+.
 import {
   createPublicClient, http, fallback, defineChain, parseAbi,
-  encodeFunctionData, decodeFunctionResult, getAddress, isAddress,
+  encodeFunctionData, decodeFunctionResult, getAddress, isAddress, keccak256,
 } from 'viem';
-import { label, BRIDGES } from './labels.js';
+import { labelFor } from './labels.js';
+import { CHAINS } from './chains.js';
 
-export const blast = defineChain({
-  id: 81457, name: 'Blast',
-  nativeCurrency: { name: 'Ether', symbol: 'ETH', decimals: 18 },
-  rpcUrls: { default: { http: ['https://rpc.blast.io'] } },
-  contracts: { multicall3: { address: '0xcA11bde05977b3631167028862bE2a173976CA11' } },
-});
 const mainnet = defineChain({
   id: 1, name: 'Ethereum',
   nativeCurrency: { name: 'Ether', symbol: 'ETH', decimals: 18 },
@@ -19,25 +14,14 @@ const mainnet = defineChain({
   contracts: { multicall3: { address: '0xcA11bde05977b3631167028862bE2a173976CA11' } },
 });
 
-const RS = 'https://api.routescan.io/v2/network/mainnet/evm/81457/etherscan/api';
 const LLAMA = 'https://coins.llama.fi/prices/current/';
+// Blast (OP Stack) withdrawals
 const PORTAL = '0x0Ec68c5B10F21EFFb74f2A5C61DFe6b08C0Db6Cb';
 const MSG_PASSED = '0x02a52367d10742d8032712c1bb8e0144ff1ec5ffda1ed7d70bb05a2744955054';
-const MULTICALL3 = '0xcA11bde05977b3631167028862bE2a173976CA11';
+// ZK Stack: Withdrawal(address,address,uint256) emitted by the ETH base token contract 0x…800a
+const ZK_WITHDRAWAL = '0x2717ead6b9200dd235aad468c9809ea400fe33ac69b5bfaa6d3e90fc922b6398';
 const ZERO = '0x0000000000000000000000000000000000000000';
 export const ETH = '0xeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee';
-
-const client = createPublicClient({
-  chain: blast,
-  transport: fallback([
-    http('https://rpc.blast.io', { batch: { batchSize: 20 }, retryCount: 2 }),
-    http('https://blast-rpc.publicnode.com', { batch: { batchSize: 20 }, retryCount: 2 }),
-  ]),
-});
-const l1 = createPublicClient({
-  chain: mainnet,
-  transport: http('https://ethereum-rpc.publicnode.com', { batch: { batchSize: 20 }, retryCount: 2 }),
-});
 
 const A = {
   erc20: parseAbi([
@@ -63,6 +47,7 @@ const A = {
     'function TOKEN() view returns (address)',
     'function token() view returns (address)',
     'function getStERC20ByNrERC20(uint256) view returns (uint256)',
+    'function factory() view returns (address)',
   ]),
   ambient: parseAbi(['function querySurplus(address owner, address token) view returns (uint128)']),
   synGate: parseAbi(['function reserveOf(address quote, address trader) view returns (uint256)']),
@@ -86,6 +71,7 @@ const A = {
     'function factory() view returns (address)',
     'function token() view returns (address)',
   ]),
+  slipstream: parseAbi(['function getPool(address,address,int24) view returns (address)']),
   v3: parseAbi([
     'function getPool(address,address,uint24) view returns (address)',
     'function poolByPair(address,address) view returns (address)',
@@ -122,12 +108,31 @@ const A = {
     'function getLendAsset() view returns (address)',
     'function asset() view returns (address)',
   ]),
+  zkNullifier: parseAbi(['function isWithdrawalFinalized(uint256 chainId, uint256 l2BatchNumber, uint256 l2MessageIndex) view returns (bool)']),
+  agwRegistry: parseAbi(['function isAGW(address) view returns (bool)']),
+  agwFactory: parseAbi(['function getAddressForSalt(bytes32) view returns (address)']),
   portal: parseAbi([
     'function finalizedWithdrawals(bytes32) view returns (bool)',
     'function provenWithdrawals(bytes32) view returns (bytes32 outputRoot, uint128 timestamp, uint128 l2OutputIndex, uint256 requestId)',
   ]),
 };
 const AGG3 = parseAbi(['function aggregate3((address target, bool allowFailure, bytes callData)[] calls) payable returns ((bool success, bytes returnData)[])']);
+
+// Every scan gets its own closure, so scans running in parallel (the bot does that) never share state.
+function createScanner(chain) {
+const client = createPublicClient({
+  chain: chain.viemChain,
+  transport: fallback(chain.rpc.map((u) => http(u, { batch: { batchSize: 20 }, retryCount: 2 }))),
+});
+const l1 = createPublicClient({
+  chain: mainnet,
+  transport: http('https://ethereum-rpc.publicnode.com', { batch: { batchSize: 20 }, retryCount: 2 }),
+});
+const RS = chain.explorerApi;
+const MULTICALL3 = chain.multicall3;
+const BRIDGES = new Set(chain.bridges);
+const WRAPPERS = new Set(chain.wrappers);
+const label = (a) => labelFor(a, chain.key);
 
 // ---------- low-level helpers ----------
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
@@ -186,7 +191,7 @@ async function rs(params, tries = 4) {
 // Paginate an account list endpoint by block range.
 const truncated = new Set();
 async function rsAll(action, address, onProgress) {
-  const PAGE = 10000, MAX = 20000;
+  const PAGE = chain.pageMax, MAX = chain.historyMax;
   // newest first: for very active wallets the recent history (bridge withdrawals, last deposits) matters most
   let end = 999999999, all = [], seen = new Set();
   while (all.length < MAX) {
@@ -206,7 +211,7 @@ async function rsAll(action, address, onProgress) {
 }
 
 async function prices(addrs) {
-  const keys = [...new Set(addrs.map(lc))].map((a) => (a === ETH ? 'coingecko:ethereum' : 'blast:' + a));
+  const keys = [...new Set(addrs.map(lc))].map((a) => (a === ETH ? 'coingecko:ethereum' : chain.llama + ':' + a));
   const out = {};
   for (let i = 0; i < keys.length; i += 60) {
     try {
@@ -223,7 +228,7 @@ async function prices(addrs) {
 
 const SPAM = /(https?:|www\.|\.(com|org|io|xyz|app|fi|net|gg|cc|me|vip|top|site|pro|live)\b|claim|visit|reward|airdrop|voucher|t\.me|t\.ly|bit\.ly|giveaway|bonus|\bgift\b|access\b|\bcode\b|\buse\b|redeem|eligible)/i;
 // "BIast" with a capital i instead of l is a classic impersonation trick
-const HOMOGLYPH = /BIast|8last|B1ast|[​-‏⁠-⁯‪-‮﻿]|[Ͱ-ϿЀ-ӿ][A-Za-z]|[A-Za-z][Ͱ-ϿЀ-ӿ]/;
+const HOMOGLYPH = /BIast|8last|B1ast|[\u200b-\u200f\u2060-\u206f\u202a-\u202e\ufeff]|[\u0370-\u03ff\u0400-\u04ff][A-Za-z]|[A-Za-z][\u0370-\u03ff\u0400-\u04ff]/;
 const isSpam = (name, symbol) => SPAM.test(name || '') || SPAM.test(symbol || '') || HOMOGLYPH.test((name || '') + (symbol || '')) || /^[!#$]/.test(name || '') || (symbol || '').length > 24;
 
 const fmt = (raw, dec) => {
@@ -234,12 +239,12 @@ const fmt = (raw, dec) => {
 };
 
 // ---------- main scan ----------
-export async function scan(input, log = () => {}) {
+async function scan(input, log = () => {}) {
   if (!isAddress(input)) throw new Error('Invalid address');
   const user = getAddress(input);
   const u = lc(user);
   const result = {
-    address: user, scannedAt: new Date().toISOString(),
+    address: user, chain: chain.key, scannedAt: new Date().toISOString(),
     wallet: [], lending: [], debts: [], lp: [], vaults: [], nftPositions: [], locks: [],
     deposits: [], sales: [], bridge: [], nfts: [], spam: [], unknown: [], notes: [],
   };
@@ -278,7 +283,7 @@ export async function scan(input, log = () => {}) {
 
   // ----- probe receipt-token interfaces -----
   log(`Decoding ${real.length} tokens (lending / LP / vaults)…`);
-  const P = ['UNDERLYING_ASSET_ADDRESS', 'POOL', 'underlying', 'exchangeRateStored', 'comptroller', 'token0', 'token1', 'getReserves', 'asset', 'underlyingToken', 'TOKEN', 'token'];
+  const P = ['UNDERLYING_ASSET_ADDRESS', 'POOL', 'underlying', 'exchangeRateStored', 'comptroller', 'token0', 'token1', 'getReserves', 'asset', 'underlyingToken', 'TOKEN', 'token', 'factory'];
   const probeCalls = [];
   for (const h of real) {
     for (const fn of P) probeCalls.push({ address: h.token, abi: A.probe, functionName: fn });
@@ -324,7 +329,8 @@ export async function scan(input, log = () => {}) {
       pending.push({ kind: 'lend', ...base, protocolGuess: 'INIT Capital', underlying: lc(p.underlyingToken), undAmountRaw: p.toAmt });
     } else if (p.token0 && p.token1 && p.getReserves && p.totalSupply) {
       const [r0, r1] = p.getReserves;
-      pending.push({ kind: 'lp', ...base, token0: lc(p.token0), token1: lc(p.token1), amt0Raw: (r0 * d.raw) / p.totalSupply, amt1Raw: (r1 * d.raw) / p.totalSupply });
+      // LP tokens are often all named "Uniswap V2": the factory tells which DEX it really is
+      pending.push({ kind: 'lp', ...base, protocol: base.protocol || label(p.factory) || '', token0: lc(p.token0), token1: lc(p.token1), amt0Raw: (r0 * d.raw) / p.totalSupply, amt1Raw: (r1 * d.raw) / p.totalSupply });
     } else if (p.asset && p.convertToAssets != null) {
       pending.push({ kind: 'vault', ...base, underlying: lc(p.asset), undAmountRaw: p.convertToAssets });
     } else if (p.TOKEN && p.nrToSt != null) {
@@ -374,11 +380,12 @@ export async function scan(input, log = () => {}) {
     });
   }
 
-  // ----- Juice Finance (positions live in per-user account contracts) -----
-  try { await juice(user, pending, meta, priceList); } catch (e) { result.notes.push('Juice Finance: ' + e.message); }
-
-  // ----- internal balances: Ambient surplus, SynFutures margin -----
-  try { await internalBalances(user, u, tokentx, meta, priceList, pending); } catch (e) { result.notes.push('Ambient / SynFutures check failed: ' + e.message); }
+  if (chain.key === 'blast') {
+    // ----- Juice Finance (positions live in per-user account contracts) -----
+    try { await juice(user, pending, meta, priceList); } catch (e) { result.notes.push('Juice Finance: ' + e.message); }
+    // ----- internal balances: Ambient surplus, SynFutures margin -----
+    try { await internalBalances(user, u, tokentx, meta, priceList, pending); } catch (e) { result.notes.push('Ambient / SynFutures check failed: ' + e.message); }
+  }
 
   // ----- NFTs: held + deposited in contracts -----
   log('Checking NFTs and LP positions…');
@@ -424,7 +431,9 @@ export async function scan(input, log = () => {}) {
 
   // ----- bridge withdrawals -----
   log('Checking unfinished bridge withdrawals on Ethereum…');
-  try { result.bridge = await bridgeWithdrawals(u, txlist, tokentx, meta); } catch (e) { result.notes.push('Bridge check failed: ' + e.message); }
+  try {
+    result.bridge = chain.withdrawals === 'zk' ? await zkWithdrawals(u, txlist, tokentx) : await bridgeWithdrawals(u, txlist, tokentx, meta);
+  } catch (e) { result.notes.push('Bridge check failed: ' + e.message); }
   result.bridge.forEach((b) => b.token && priceList.add(b.token));
 
   // ----- prices -----
@@ -503,10 +512,11 @@ export async function scan(input, log = () => {}) {
     possible: sum(result.deposits.filter((d) => d.confidence === 'high')),
     likely: sum(result.deposits.filter((d) => d.confidence === 'medium')),
     bridgePending: sum(result.bridge.filter((b) => b.status !== 'finalized')),
+    bridgeClaimable: sum(result.bridge.filter((b) => b.status === 'claimable' || b.status === 'proven')),
   };
   result.totals.net = result.totals.wallet + result.totals.positions - result.totals.debt;
   for (const k of ['wallet', 'vaults', 'lp', 'nftPositions', 'debts', 'deposits', 'locks', 'sales']) result[k].sort((a, b) => (b.usd || 0) - (a.usd || 0));
-  if (truncated.size) result.notes.push('Very active wallet: only the most recent 20,000 records of history were scanned.');
+  if (truncated.size) result.notes.push(`Very active wallet: only the most recent ${chain.historyMax.toLocaleString('en-US')} records of history were scanned.`);
   log('Done');
   return result;
 }
@@ -727,13 +737,18 @@ async function decodeNfts(list, u, meta, result, priceList) {
     return { address: f, abi: A.v3, functionName: 'poolByPair', args: [p.t0, p.t1] };
   });
   const pools = await multi(lookups.map((l) => l || { address: ZERO, abi: A.v3, functionName: 'poolByPair', args: [ZERO, ZERO] }));
+  const retry = positions.map(({ p, c }, i) => (p.kind === 'uni' && !pools[i] && C[c].factory && p.fee < 2 ** 23 ? i : -1)).filter((i) => i >= 0);
+  if (retry.length) {
+    const alt = await multi(retry.map((i) => ({ address: C[positions[i].c].factory, abi: A.slipstream, functionName: 'getPool', args: [positions[i].p.t0, positions[i].p.t1, positions[i].p.fee] })));
+    retry.forEach((i, k) => { if (alt[k] && alt[k] !== ZERO) pools[i] = alt[k]; });
+  }
   // slot0() 0x3850c7bd / globalState() 0xe76c01e4 — first word is sqrtPriceX96 in both
   const st = await rawMulti(positions.map(({ p }, i) => ({ target: pools[i] || ZERO, data: p.kind === 'uni' ? '0x3850c7bd' : '0xe76c01e4' })));
   await fillMeta(positions.flatMap(({ p }) => [p.t0, p.t1]).filter((a) => !meta[a]), meta);
 
-  positions.forEach(({ base, p }, i) => {
+  positions.forEach(({ base, p, c }, i) => {
     priceList.add(p.t0); priceList.add(p.t1);
-    const row = { ...base, type: p.kind === 'uni' ? 'Concentrated LP (V3)' : 'Concentrated LP (Algebra)', protocol: label(base.contract) || protoFromName(base.collection) || base.collection, token0: p.t0, token1: p.t1, owed0Raw: p.o0, owed1Raw: p.o1 };
+    const row = { ...base, type: p.kind === 'uni' ? 'Concentrated LP (V3)' : 'Concentrated LP (Algebra)', protocol: label(base.contract) || label(C[c].factory) || protoFromName(base.collection) || base.collection, token0: p.t0, token1: p.t1, owed0Raw: p.o0, owed1Raw: p.o1 };
     if (st[i].ok && pools[i]) {
       const sqrtP = Number(W(st[i].data, 0)) / 2 ** 96;
       const sa = Math.pow(1.0001, p.tl / 2), sb = Math.pow(1.0001, p.tu / 2), L = Number(p.L);
@@ -758,7 +773,6 @@ const GAME_FN = /^(bet|play|spin|roll|guess|enter|createGame|placeBet|flip|draw)
 const SALE_FN = /^(buy|purchase|contribute|commit|participate|presale|mint|bid|invest|swapExactETH|purchaseTokens|joinSale)/i;
 const SALE_NAME = /sale|presale|launch|ido\b|ico\b|fair|crowd|seed|vesting|allocation|contribution|whitelist|pad\b|starter/i;
 const GENERIC_NAME = /^(proxy|transparentupgradeableproxy|erc1967proxy|beaconproxy|uupsproxy|adminupgradeabilityproxy|contract)$/i;
-const WRAPPERS = new Set(['0x4300000000000000000000000000000000000004', '0x4300000000000000000000000000000000000003', '0xca11bde05977b3631167028862be2a173976ca11']);
 
 function depositHeuristic(u, tokentx, nfttx, txlist, internal) {
   const byHash = new Map();
@@ -853,11 +867,11 @@ async function contractNames(addrs) {
       const c = q.shift();
       try {
         const res = await rs({ module: 'contract', action: 'getsourcecode', address: c }, 2);
-        let name = res?.[0]?.ContractName || null;
+        let name = (res?.[0]?.ContractName || '').split(':').pop() || null;
         const impl = res?.[0]?.Implementation;
         if ((!name || GENERIC_NAME.test(name)) && impl && isAddress(impl)) {
           const r2 = await rs({ module: 'contract', action: 'getsourcecode', address: impl }, 2);
-          if (r2?.[0]?.ContractName) name = r2[0].ContractName;
+          if (r2?.[0]?.ContractName) name = r2[0].ContractName.split(':').pop();
         }
         out[c].sourceName = name && !GENERIC_NAME.test(name) ? name : null;
       } catch { /* optional */ }
@@ -991,4 +1005,89 @@ async function bridgeWithdrawals(u, txlist, tokentx, meta) {
     else it.status = 'initiated';
   });
   return items.sort((a, b) => b.ts - a.ts);
+}
+
+// ---- ZK Stack (Abstract) L2 -> L1 withdrawals ----
+// A withdrawal is final only after someone calls finalizeWithdrawal on Ethereum. We read each withdrawal's
+// batch and message index from the L2 and ask the L1 nullifier whether it was claimed.
+async function zkWithdrawals(u, txlist, tokentx) {
+  const zrpc = async (method, params) => {
+    const r = await fetch(chain.rpc[0], { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ jsonrpc: '2.0', id: 1, method, params }) });
+    const j = await r.json();
+    if (j.error) throw new Error(j.error.message);
+    return j.result;
+  };
+  const txs = txlist
+    .filter((t) => lc(t.from) === u && t.isError !== '1' && t.to && (BRIDGES.has(lc(t.to)) || /withdraw/i.test(t.functionName || '')))
+    .slice(-40);
+  if (!txs.length) return [];
+  const items = [];
+  await Promise.all(txs.map(async (t) => {
+    const rc = await zrpc('eth_getTransactionReceipt', [t.hash]).catch(() => null);
+    if (!rc?.l2ToL1Logs?.length) return;
+    for (let i = 0; i < rc.l2ToL1Logs.length; i++) {
+      const lg = rc.l2ToL1Logs[i];
+      const from = '0x' + (lg.key || '').slice(-40).toLowerCase();
+      if (!BRIDGES.has(from)) continue; // only bridge messages (ETH base token, asset router, legacy bridge)
+      const ethLog = rc.logs.find((l) => lc(l.address) === '0x000000000000000000000000000000000000800a' && l.topics[0] === ZK_WITHDRAWAL);
+      const out = tokentx.find((x) => x.hash === t.hash && lc(x.from) === u);
+      items.push({
+        txHash: t.hash, date: new Date(Number(t.timeStamp) * 1000).toISOString().slice(0, 10), ts: Number(t.timeStamp),
+        batch: parseInt(rc.l1BatchNumber, 16), logIndex: i,
+        token: from.endsWith('800a') ? ETH : out ? lc(out.contractAddress) : ETH,
+        raw: from.endsWith('800a') ? (ethLog ? BigInt(ethLog.data.slice(0, 66)) : BigInt(t.value || 0)) : out ? BigInt(out.value) : 0n,
+        withdrawalHash: t.hash,
+      });
+    }
+  }));
+  if (!items.length) return [];
+  await Promise.all(items.map(async (it) => {
+    try {
+      const det = await zrpc('zks_getL1BatchDetails', [it.batch]);
+      if (!det?.executedAt) { it.status = 'waiting'; return; } // batch not on Ethereum yet (about 3 hours)
+      const proof = await zrpc('zks_getL2ToL1LogProof', [it.txHash, it.logIndex]);
+      it.msgIndex = proof?.id;
+    } catch { it.status = 'unknown'; }
+  }));
+  const ready = items.filter((it) => !it.status && it.msgIndex != null);
+  if (ready.length) {
+    const st = await l1.multicall({
+      allowFailure: true,
+      contracts: ready.map((it) => ({ address: chain.zk.l1Nullifier, abi: A.zkNullifier, functionName: 'isWithdrawalFinalized', args: [chain.zk.chainId, BigInt(it.batch), BigInt(it.msgIndex)] })),
+    });
+    ready.forEach((it, i) => { it.status = st[i].status === 'success' ? (st[i].result ? 'finalized' : 'claimable') : 'unknown'; });
+  }
+  items.forEach((it) => { if (!it.status) it.status = 'unknown'; });
+  return items.sort((a, b) => b.ts - a.ts);
+}
+
+return { scan };
+}
+
+// Public API: scan(address, log, { chain: 'blast' | 'abstract' })
+export async function scan(input, log = () => {}, opts = {}) {
+  const chain = CHAINS[opts.chain || 'blast'];
+  if (!chain) throw new Error('Unknown chain: ' + opts.chain);
+  return createScanner(chain).scan(input, log);
+}
+
+// Abstract users mostly hold funds in an Abstract Global Wallet (a smart account derived from their signer).
+// Given any address, return the addresses worth scanning on Abstract.
+export async function abstractWallets(input) {
+  if (!isAddress(input)) throw new Error('Invalid address');
+  const chain = CHAINS.abstract;
+  const c = createPublicClient({ chain: chain.viemChain, transport: http(chain.rpc[0]) });
+  const addr = getAddress(input);
+  const code = await c.getCode({ address: addr }).catch(() => null);
+  const isContract = !!(code && code !== '0x');
+  if (isContract) {
+    const isAgw = await c.readContract({ address: chain.agw.registry, abi: A.agwRegistry, functionName: 'isAGW', args: [addr] }).catch(() => false);
+    return [{ address: addr, kind: isAgw ? 'agw' : 'contract' }];
+  }
+  const agw = await c.readContract({ address: chain.agw.factory, abi: A.agwFactory, functionName: 'getAddressForSalt', args: [keccak256(addr)] }).catch(() => null);
+  const agwCode = agw ? await c.getCode({ address: agw }).catch(() => null) : null;
+  const out = [];
+  if (agw && agwCode && agwCode !== '0x') out.push({ address: getAddress(agw), kind: 'agw', signer: addr });
+  out.push({ address: addr, kind: 'eoa' });
+  return out;
 }

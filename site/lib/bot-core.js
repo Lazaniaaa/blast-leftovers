@@ -1,16 +1,19 @@
 // Shared Telegram bot logic for Blast Leftovers: used by the local long-polling runner (bot/bot.mjs)
 // and by the Vercel webhook (api/telegram.js). Read-only: it never asks for keys or signatures.
-import { scan } from '../engine.js';
+import { scan, abstractWallets } from '../engine.js';
+import { CHAINS } from '../chains.js';
 import { resolveProtocol } from '../protocols.js';
 import { loadTally, DONATE_ADDRESS, COLLECTION_URL } from '../donate.js';
 
 export const SITE = 'https://blast-leftovers.vercel.app';
 export const EXAMPLE = '0x0ee09b204ffebf9a1f14c99e242830a09958ba34';
-const DEADLINE = new Date('2026-10-26T23:59:59Z');
 const MAX_PARALLEL = 2;          // per process: keep explorers happy
 const CACHE_MS = 5 * 60 * 1000;
 const SHARE_MIN_USD = 20;
-const SCAN = 'https://blastscan.io';
+// explorer of the chain whose report is being built (report() is synchronous)
+let CUR = CHAINS.blast;
+let SCAN = CUR.scan;
+const daysLeft = (c) => Math.ceil((new Date(c.deadline) - Date.now()) / 86400000);
 
 // Optional hooks the runner can set: stats, owner notifications.
 export const hooks = { onUser: () => {}, onScan: () => {}, onShare: () => {}, stats: null };
@@ -39,64 +42,70 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 // ---------- texts ----------
 const T = {
   en: {
-    start: (n) => `👋 Hi${n ? ' ' + n : ''}! Blast is shutting down, and UI withdrawals close <b>Oct 26</b>.\n\nJust paste a wallet address here, no command needed. I'll find what is still sitting on Blast: lending deposits, LP positions, staking, vaults, locks and bridge withdrawals you never finished.\n\n🔒 Read-only. I never ask you to connect a wallet, sign anything or share keys. Only send a public address.\n\nExample: /example · Українська: /lang`,
+    start: (n) => `👋 Hi${n ? ' ' + n : ''}! Blast closes <b>Oct 26</b> and Abstract closes <b>Dec 15</b>.\n\nJust paste a wallet address here, no command needed. I'll check both chains and find what is still there: lending deposits, LP positions, staking, vaults, locks and bridge withdrawals you never finished. Your Abstract Global Wallet is found automatically from your signer address.\n\n🔒 Read-only. I never ask you to connect a wallet, sign anything or share keys. Only send a public address.\n\nExample: /example · Українська: /lang`,
     send: 'Just paste a wallet address (0x…, 42 characters), no command needed.',
     invalid: 'That does not look like a wallet address. It should start with 0x and have 40 hex characters.',
     queued: (n) => `⏳ You are #${n} in the queue, starting soon…`,
-    scanning: '🔎 Scanning Blast…',
+    scanning: '🔎 Scanning Blast and Abstract…',
     busy: 'I am still scanning your previous address. One at a time, please 🙏',
     failed: (m) => `⚠️ Scan failed: ${m}\nPublic APIs sometimes rate-limit. Try again in a minute.`,
-    head: 'Blast check', found: 'Found on Blast', inProto: 'in protocols', inWallet: 'in wallet', debt: 'debt', bridge: 'unfinished bridge',
-    days: (d) => d > 0 ? `⏳ UI withdrawals close Oct 26 (${d} day${d === 1 ? '' : 's'} left)` : '⏳ UI deadline passed: withdraw via the L1 contract',
+    head: (n) => `${n} check`, found: (n) => `Found on ${n}`, inProto: 'in protocols', inWallet: 'in wallet', debt: 'debt', bridge: 'unfinished bridge',
+    days: (name, label, d) => d > 0 ? `⏳ ${name} closes ${label} (${d} day${d === 1 ? '' : 's'} left)` : `⏳ ${name}: deadline passed`,
+    agw: 'Abstract Global Wallet', signer: 'signer address', agwNote: (sg) => `Found automatically from the signer ${sg} you sent.`,
+    sBridgeNoteAbs: '"Ready to claim" means the batch is on Ethereum but nobody claimed the funds yet: claim them on the official migration page. "Waiting" means the batch is not on Ethereum yet (about 3 hours).',
     sBridge: '🌉 Unfinished bridge withdrawals', sBridgeNote: 'Started on Blast, never finalized on Ethereum. Finish them on the official bridge or the L1 portal contract.',
     sLend: '🏦 Lending, vaults, collateral', sLp: '💧 Liquidity', sStake: '🔒 Staked, locked, deposited', sWallet: '👛 Tokens in the wallet', sSales: '🎟 Token sales',
     supplied: 'supplied', borrowed: 'borrowed', vault: 'vault', lp: 'LP', lpNft: 'LP NFT', lock: 'lock', stream: 'vesting, withdrawable now', inFarm: 'staked in a farm',
     conf: { high: 'confirmed', medium: 'likely' }, unlocks: 'unlocks', permanent: 'permanent',
-    st: { initiated: 'not proven', proven: 'proven, not finalized' },
+    st: { initiated: 'not proven', proven: 'proven, not finalized', waiting: 'waiting for Ethereum', claimable: 'ready to claim', unknown: 'unknown' },
     dead: 'site down → withdraw via contract', contract: 'contract', tx: 'tx', noPrice: 'no price',
     salesLine: (n, c) => `${n} sale${n === 1 ? '' : 's'} found, ${c} already claimed. Not counted as found money.`,
     unclaimed: 'not claimed? check claim/refund',
     more: (n) => `…and ${n} more on the website`,
     extras: (a, b, c, d) => `Also: ${a} probably already moved · ${b} tokens without price · ${c} NFTs · ${d} scam tokens hidden`,
-    nothing: 'Nothing found on Blast for this address. If you used Blast Mobile, AgentFi or a Safe, send that address too.',
+    nothing: (n) => `Nothing found on ${n} for this address.`,
+    nothingHint: 'If you used Blast Mobile, AgentFi or a Safe, send that address too.',
     beta: 'Beta: part of this is heuristics and can be wrong. Check the contract on the explorer before you act.',
     full: '📄 Full report', donate: '💍 Donate', share: '📣 Share on X', again: '🔄 Rescan',
     donateText: '🙏 If this saved you some forgotten bags, tip the dev! 💍 Every donation goes toward buying one OCH Ringbearer 🧙‍♂️✨ (not set in stone: if it adds up to 2 or more, I’ll probably grab more 😏)',
-    donateAddr: 'EVM address (tap to copy), works on Ethereum, Base, BNB Chain, Arbitrum, Robinhood Chain, Monad, Polygon, Avalanche, Arc, Plasma, OP Mainnet, Blast:',
+    donateAddr: 'EVM address (tap to copy), works on Ethereum, Base, BNB Chain, Arbitrum, Robinhood Chain, Monad, Polygon, Avalanche, Arc, Plasma, OP Mainnet, Blast, Abstract:',
     raised: 'Raised so far', partial: (l) => `some networks did not respond (${l}), the real total may be higher`,
     collection: 'OCH Ringbearer on OpenSea',
     langSet: 'Language: English 🇬🇧',
-    sharePrompt: (v) => `🎉 You found <b>${v}</b> on Blast. Help others check theirs before Oct 26, the button below opens a ready post (your address is not in it).`,
+    sharePrompt: (v, chains) => `🎉 You found <b>${v}</b> on ${chains}. Help others check theirs before the deadline, the button below opens a ready post (your address is not in it).`,
   },
   uk: {
-    start: (n) => `👋 Привіт${n ? ', ' + n : ''}! Blast закривається, вивід через UI працює до <b>26 жовтня</b>.\n\nПросто встав сюди адресу гаманця, команда не потрібна. Я знайду, що ще лежить на Blast: депозити в лендінгах, LP-позиції, стейкінг, волти, локи та незавершені виводи через міст.\n\n🔒 Тільки читання. Я ніколи не прошу підключати гаманець, щось підписувати чи давати ключі. Надсилай лише публічну адресу.\n\nПриклад: /example · English: /lang`,
+    start: (n) => `👋 Привіт${n ? ', ' + n : ''}! Blast закривається <b>26 жовтня</b>, Abstract — <b>15 грудня</b>.\n\nПросто встав сюди адресу гаманця, команда не потрібна. Я перевірю обидві мережі й знайду, що там ще лежить: депозити в лендінгах, LP-позиції, стейкінг, волти, локи та незавершені виводи через міст. Abstract Global Wallet знайду автоматично за адресою signer.\n\n🔒 Тільки читання. Я ніколи не прошу підключати гаманець, щось підписувати чи давати ключі. Надсилай лише публічну адресу.\n\nПриклад: /example · English: /lang`,
     send: 'Просто встав адресу гаманця (0x…, 42 символи), команда не потрібна.',
     invalid: 'Це не схоже на адресу гаманця. Вона має починатися з 0x і мати 40 hex-символів.',
     queued: (n) => `⏳ Ти #${n} у черзі, зараз почну…`,
-    scanning: '🔎 Сканую Blast…',
+    scanning: '🔎 Сканую Blast і Abstract…',
     busy: 'Ще сканую твою попередню адресу. По одній, будь ласка 🙏',
     failed: (m) => `⚠️ Помилка сканування: ${m}\nПублічні API іноді обмежують запити. Спробуй ще раз за хвилину.`,
-    head: 'Перевірка Blast', found: 'Знайдено на Blast', inProto: 'у протоколах', inWallet: 'на гаманці', debt: 'борг', bridge: 'міст, не завершено',
-    days: (d) => d > 0 ? `⏳ Вивід через UI до 26 жовтня (лишилось ${d} дн.)` : '⏳ Дедлайн UI минув: вивід через L1-контракт',
+    head: (n) => `Перевірка ${n}`, found: (n) => `Знайдено на ${n}`, inProto: 'у протоколах', inWallet: 'на гаманці', debt: 'борг', bridge: 'міст, не завершено',
+    days: (name, label, d) => d > 0 ? `⏳ ${name} закривається ${label} (лишилось ${d} дн.)` : `⏳ ${name}: дедлайн минув`,
+    agw: 'Abstract Global Wallet', signer: 'адреса signer', agwNote: (sg) => `Знайдено автоматично за адресою signer ${sg}, яку ти надіслав.`,
+    sBridgeNoteAbs: '«Можна заклеймити» означає, що батч уже в Ethereum, але кошти ніхто не забрав: заклейми їх на офіційній сторінці міграції. «Чекає Ethereum» означає, що батч ще не в Ethereum (близько 3 годин).',
     sBridge: '🌉 Незавершені виводи через міст', sBridgeNote: 'Почато на Blast, але не завершено в Ethereum. Заверши через офіційний міст або L1-контракт порталу.',
     sLend: '🏦 Лендінги, волти, застава', sLp: '💧 Ліквідність', sStake: '🔒 Стейкінг, локи, депозити', sWallet: '👛 Токени на гаманці', sSales: '🎟 Сейли токенів',
     supplied: 'депозит', borrowed: 'борг', vault: 'волт', lp: 'LP', lpNft: 'LP NFT', lock: 'лок', stream: 'вестинг, можна вивести зараз', inFarm: 'застейкано у фармі',
     conf: { high: 'підтверджено', medium: 'ймовірно' }, unlocks: 'розлок', permanent: 'безстроковий',
-    st: { initiated: 'не доведено (prove)', proven: 'доведено, не фіналізовано' },
+    st: { initiated: 'не доведено (prove)', proven: 'доведено, не фіналізовано', waiting: 'чекає Ethereum', claimable: 'можна заклеймити', unknown: 'невідомо' },
     dead: 'сайт не працює → вивід через контракт', contract: 'контракт', tx: 'tx', noPrice: 'немає ціни',
     salesLine: (n, c) => `Знайдено сейлів: ${n}, з них заклеймлено: ${c}. У знайдену суму не входять.`,
     unclaimed: 'не заклеймлено? перевір claim/refund',
     more: (n) => `…і ще ${n} на сайті`,
     extras: (a, b, c, d) => `Ще: ${a} ймовірно вже виведено · ${b} токенів без ціни · ${c} NFT · ${d} скам-токенів приховано`,
-    nothing: 'Для цієї адреси на Blast нічого не знайдено. Якщо користувався Blast Mobile, AgentFi чи Safe, надішли і ту адресу.',
+    nothing: (n) => `Для цієї адреси на ${n} нічого не знайдено.`,
+    nothingHint: 'Якщо користувався Blast Mobile, AgentFi чи Safe, надішли і ту адресу.',
     beta: 'Бета: частина результатів — евристика і може помилятися. Перевір контракт в експлорері перед діями.',
     full: '📄 Повний звіт', donate: '💍 Донат', share: '📣 Поділитися в X', again: '🔄 Пересканувати',
     donateText: '🙏 Якщо бот допоміг знайти забуті гроші, підкинь трохи розробнику! 💍 Усі донати підуть на покупку одного OCH Ringbearer 🧙‍♂️✨ (але це не точно: якщо збереться на 2 і більше, мабуть, куплю більше 😏)',
-    donateAddr: 'EVM-адреса (натисни, щоб скопіювати), працює в Ethereum, Base, BNB Chain, Arbitrum, Robinhood Chain, Monad, Polygon, Avalanche, Arc, Plasma, OP Mainnet, Blast:',
+    donateAddr: 'EVM-адреса (натисни, щоб скопіювати), працює в Ethereum, Base, BNB Chain, Arbitrum, Robinhood Chain, Monad, Polygon, Avalanche, Arc, Plasma, OP Mainnet, Blast, Abstract:',
     raised: 'Вже зібрано', partial: (l) => `частина мереж не відповіла (${l}), реальна сума може бути більшою`,
     collection: 'OCH Ringbearer на OpenSea',
     langSet: 'Мова: українська 🇺🇦',
-    sharePrompt: (v) => `🎉 Ти знайшов <b>${v}</b> на Blast. Допоможи іншим перевірити свої гаманці до 26 жовтня: кнопка нижче відкриває готовий пост (твоєї адреси в ньому немає).`,
+    sharePrompt: (v, chains) => `🎉 Ти знайшов <b>${v}</b> на ${chains}. Допоможи іншим перевірити свої гаманці до дедлайну: кнопка нижче відкриває готовий пост (твоєї адреси в ньому немає).`,
   },
 };
 const LOG_UK = [
@@ -144,19 +153,24 @@ function proto(row, withdrawContract, t) {
 
 export function report(r, lang) {
   const t = T[lang];
+  CUR = CHAINS[r.chain || 'blast'];
+  SCAN = CUR.scan;
   r = { ...r, vaults: r.vaults.filter(notDust), debts: r.debts.filter(notDust), lp: r.lp.filter(notDust), wallet: r.wallet.filter(notDust) };
   const L = [];
-  const days = Math.ceil((DEADLINE - Date.now()) / 86400000);
+  const days = daysLeft(CUR);
+  const label = new Date(CUR.deadline).toLocaleDateString(lang === 'uk' ? 'uk-UA' : 'en-US', { month: 'short', day: 'numeric', timeZone: 'UTC' });
+  const title = r.chain === 'abstract' && r.kind === 'agw' ? `${CUR.name} · ${t.agw}` : r.chain === 'abstract' && r.kind === 'eoa' && r.hasAgw ? `${CUR.name} · ${t.signer}` : CUR.name;
   const pendingBridge = r.bridge.filter((b) => b.status !== 'finalized');
   const depsGood = r.deposits.filter((d) => d.confidence !== 'low');
   const found = r.totals.wallet + r.totals.positions + r.totals.possible + r.totals.bridgePending;
-  L.push(`🔎 <b>${t.head}</b> · <code>${esc(r.address)}</code>`);
-  L.push(`💰 ${t.found}: <b>${usd(found)}</b>`);
+  L.push(`🔎 <b>${esc(title)}</b> · <code>${esc(r.address)}</code>`);
+  if (r.kind === 'agw' && r.signer) L.push(`<i>${t.agwNote(short(r.signer))}</i>`);
+  L.push(`💰 ${t.found(CUR.name)}: <b>${usd(found)}</b>`);
   const parts = [`${t.inProto} ${usd(r.totals.positions + r.totals.possible)}`, `${t.inWallet} ${usd(r.totals.wallet)}`];
   if (r.totals.debt > 0) parts.push(`${t.debt} −${usd(r.totals.debt)}`);
   if (pendingBridge.length) parts.push(`${t.bridge} ${usd(r.totals.bridgePending)}`);
   L.push(parts.join(' · '));
-  L.push(t.days(days));
+  L.push(t.days(CUR.name, label, days));
 
   const section = (title, rows, max = 8) => {
     if (!rows.length) return;
@@ -166,7 +180,7 @@ export function report(r, lang) {
   };
 
   section(t.sBridge, pendingBridge.map((b) => `• <b>${amt(b.amount)} ${esc(b.symbol || 'ETH')}</b> (${usd(b.usd) || t.noPrice}) · ${t.st[b.status] || b.status} · ${b.date} · ${link(`${SCAN}/tx/${b.txHash}`, t.tx)}`));
-  if (pendingBridge.length) L.push(`<i>${t.sBridgeNote}</i> ${link('https://blast.io', 'blast.io')}`);
+  if (pendingBridge.length) L.push(`<i>${r.chain === 'abstract' ? t.sBridgeNoteAbs : t.sBridgeNote}</i> ${link(CUR.bridgeUrl, CUR.bridgeUrl.replace('https://', ''))}`);
 
   const lend = [];
   for (const l of r.lending) {
@@ -218,7 +232,7 @@ export function report(r, lang) {
   }
 
   const empty = !r.wallet.length && !r.vaults.length && !r.lp.length && !r.nftPositions.length && !r.locks.length && !depsGood.length && !pendingBridge.length && !r.debts.length;
-  if (empty) L.push('', t.nothing);
+  if (empty) L.push('', t.nothing(CUR.name) + ' ' + t.nothingHint);
   const low = r.deposits.filter((d) => d.confidence === 'low').length;
   L.push('', `<i>${t.extras(low, r.unknown.length, r.nfts.length, r.spam.length)}</i>`);
   L.push(`<i>${t.beta}</i>`);
@@ -235,18 +249,20 @@ export function chunks(text, max = 3900) {
   return out;
 }
 
-function shareUrl(v) {
-  const text = `just found ${usd(v).replace('<', '')} I forgot on Blast before it shuts down 😳\n\ncheck yours before Oct 26, just paste your address:\nblast-leftovers.vercel.app\n\nh/t @NotYur`;
+function shareUrl(v, chains = ['blast']) {
+  const c = CHAINS[chains[0] || 'blast'];
+  const text = chains.length > 1
+    ? `just found ${usd(v).replace('<', '')} I forgot on Blast and Abstract before they shut down 😳\n\ncheck yours, just paste your address:\nblast-leftovers.vercel.app\n\nh/t @NotYur`
+    : `just found ${usd(v).replace('<', '')} I forgot on ${c.name} before it shuts down 😳\n\ncheck yours before ${c.deadlineLabel}, just paste your address:\nblast-leftovers.vercel.app\n\nh/t @NotYur`;
   return 'https://x.com/intent/post?text=' + encodeURIComponent(text);
 }
 
-export function buttons(r, lang) {
+export function buttons(r, lang, input = r.address) {
   const t = T[lang];
-  const rows = [[{ text: t.full, url: `${SITE}/?a=${r.address}` }, { text: t.donate, callback_data: 'donate' }]];
-  const v = shareAmount(r);
-  if (v >= SHARE_MIN_USD && r.address.toLowerCase() !== EXAMPLE) rows.push([{ text: t.share, url: shareUrl(v) }]);
-  rows.push([{ text: t.again, callback_data: 'rescan:' + r.address }]);
-  return { inline_keyboard: rows };
+  return { inline_keyboard: [
+    [{ text: t.full, url: `${SITE}/?a=${input}` }, { text: t.donate, callback_data: 'donate' }],
+    [{ text: t.again, callback_data: 'rescan:' + input }],
+  ] };
 }
 
 // ---------- scan queue + cache ----------
@@ -265,37 +281,64 @@ function pump() {
   }
 }
 
+async function scanCached(address, chain, onLog) {
+  const key = chain + '|' + address.toLowerCase();
+  const hit = cache.get(key);
+  if (hit && Date.now() - hit.at < CACHE_MS) return hit.result;
+  const result = await enqueue(() => scan(address, onLog, { chain }));
+  cache.set(key, { at: Date.now(), result });
+  return result;
+}
+
 async function handleScan(chatId, address, lang) {
   const t = T[lang];
   if (active.has(chatId)) { await tg('sendMessage', { chat_id: chatId, text: t.busy }); return; }
   active.add(chatId);
   const status = await tg('sendMessage', { chat_id: chatId, text: queue.length || running >= MAX_PARALLEL ? t.queued(queue.length + 1) : t.scanning });
   try {
-    const key = address.toLowerCase();
-    let r = cache.get(key);
-    if (!r || Date.now() - r.at > CACHE_MS) {
-      let last = 0, finished = false, inFlight = Promise.resolve();
-      const result = await enqueue(() => scan(address, (m) => {
+    // Blast: the address itself. Abstract: its Global Wallet (if any) plus the address itself.
+    const ws = await abstractWallets(address).catch(() => [{ address, kind: 'eoa' }]);
+    const jobs = [{ chain: 'blast', address, kind: 'eoa' }, ...ws.map((w) => ({ chain: 'abstract', address: w.address, kind: w.kind, signer: w.signer }))];
+    let last = 0, finished = false, inFlight = Promise.resolve();
+    const lines = {};
+    const results = await Promise.all(jobs.map((j) => {
+      const tag = j.chain === 'abstract' && ws.length > 1 ? `Abstract (${j.kind === 'agw' ? 'AGW' : 'signer'})` : CHAINS[j.chain].name;
+      return scanCached(j.address, j.chain, (m) => {
+        lines[tag] = trLog(lang, m);
         if (finished || Date.now() - last < 2500) return;
         last = Date.now();
-        inFlight = tg('editMessageText', { chat_id: chatId, message_id: status.message_id, text: `${t.scanning}\n${trLog(lang, m)}` }).catch(() => {});
-      }));
-      finished = true;
-      await inFlight; // a late "Done" edit would otherwise overwrite the report
-      r = { at: Date.now(), result };
-      cache.set(key, r);
+        inFlight = tg('editMessageText', { chat_id: chatId, message_id: status.message_id, text: `${t.scanning}\n${Object.entries(lines).map(([k, v]) => k + ': ' + v).join('\n')}` }).catch(() => {});
+      }).then((r) => ({ ...r, kind: j.kind, signer: j.signer })).catch((e) => ({ error: e, chain: j.chain, address: j.address }));
+    }));
+    finished = true;
+    await inFlight; // a late progress edit would otherwise overwrite the report
+    const ok = results.filter((r) => !r.error);
+    const agwFound = ok.some((r) => r.chain === 'abstract' && r.kind === 'agw');
+    ok.forEach((r) => { if (r.chain === 'abstract' && r.kind === 'eoa') r.hasAgw = agwFound; });
+    const isEmpty = (r) => !r.wallet.some((w) => (w.usd || 0) >= 0.01) && !r.vaults.length && !r.lp.length && !r.nftPositions.length && !r.locks.length
+      && !r.deposits.some((d) => d.confidence !== 'low') && !r.bridge.some((b) => b.status !== 'finalized') && !r.debts.length;
+    // the signer of an AGW is reported only when it holds something itself
+    const shown = ok.filter((r) => !(r.hasAgw && isEmpty(r)));
+    const messages = [];
+    for (const r of shown) {
+      if (isEmpty(r)) messages.push(`🔎 <b>${esc(CHAINS[r.chain].name)}</b>: ${t.nothing(CHAINS[r.chain].name)}`);
+      else messages.push(...chunks(report(r, lang)));
     }
-    const parts = chunks(report(r.result, lang));
-    await tg('editMessageText', { chat_id: chatId, message_id: status.message_id, text: parts[0], parse_mode: 'HTML', disable_web_page_preview: true, reply_markup: parts.length === 1 ? buttons(r.result, lang) : undefined });
-    for (let i = 1; i < parts.length; i++) {
-      await tg('sendMessage', { chat_id: chatId, text: parts[i], parse_mode: 'HTML', disable_web_page_preview: true, reply_markup: i === parts.length - 1 ? buttons(r.result, lang) : undefined });
+    for (const e of results.filter((r) => r.error)) messages.push(t.failed(`${CHAINS[e.chain].name}: ${e.error.shortMessage || e.error.message}`));
+    const kb = buttons({ address }, lang, address);
+    for (let i = 0; i < messages.length; i++) {
+      const payload = { chat_id: chatId, text: messages[i], parse_mode: 'HTML', disable_web_page_preview: true, reply_markup: i === messages.length - 1 ? kb : undefined };
+      if (i === 0) await tg('editMessageText', { ...payload, message_id: status.message_id });
+      else await tg('sendMessage', payload);
     }
-    const v = shareAmount(r.result);
-    if (v >= SHARE_MIN_USD && key !== EXAMPLE) {
+    const isEx = address.toLowerCase() === EXAMPLE;
+    const total = shown.reduce((sum, r) => sum + shareAmount(r), 0);
+    const chainsWithFinds = [...new Set(shown.filter((r) => shareAmount(r) >= 1).map((r) => r.chain))];
+    if (total >= SHARE_MIN_USD && !isEx) {
       hooks.onShare();
-      await tg('sendMessage', { chat_id: chatId, text: t.sharePrompt(usd(v)), parse_mode: 'HTML', reply_markup: { inline_keyboard: [[{ text: t.share, url: shareUrl(v) }]] } });
+      await tg('sendMessage', { chat_id: chatId, text: t.sharePrompt(usd(total), chainsWithFinds.map((k) => CHAINS[k].name).join(' + ')), parse_mode: 'HTML', reply_markup: { inline_keyboard: [[{ text: t.share, url: shareUrl(total, chainsWithFinds) }]] } });
     }
-    hooks.onScan(shareAmount(r.result), key === EXAMPLE, usd);
+    hooks.onScan(total, isEx, usd);
   } catch (e) {
     console.error('scan error:', e.shortMessage || e.message);
     await tg('editMessageText', { chat_id: chatId, message_id: status.message_id, text: t.failed(e.shortMessage || e.message) }).catch(() => {});
@@ -352,7 +395,7 @@ async function onCallback(q) {
   if (q.data === 'donate') return sendDonate(chatId, lang);
   if (q.data?.startsWith('rescan:')) {
     const addr = q.data.slice(7);
-    cache.delete(addr.toLowerCase());
+    for (const k of [...cache.keys()]) if (k.endsWith('|' + addr.toLowerCase())) cache.delete(k);
     return handleScan(chatId, addr, lang);
   }
 }
@@ -371,8 +414,8 @@ export async function setup() {
     { command: 'donate', description: 'Підтримати розробника' },
     { command: 'lang', description: 'English / Українська' },
   ] });
-  await tg('setMyShortDescription', { short_description: 'Check what you still have on Blast before it shuts down. Just send an address, no wallet connection.' }).catch(() => {});
-  await tg('setMyDescription', { description: 'Blast is shutting down (UI withdrawals close Oct 26). Send any wallet address and I will find lending deposits, LP positions, staking, vaults and unfinished bridge withdrawals still on Blast. Read-only: I never ask to connect a wallet or sign anything. Open source: github.com/Lazaniaaa/blast-leftovers' }).catch(() => {});
+  await tg('setMyShortDescription', { short_description: 'Check what you still have on Blast and Abstract before they shut down. Just send an address, no wallet connection.' }).catch(() => {});
+  await tg('setMyDescription', { description: 'Blast (closes Oct 26) and Abstract (closes Dec 15) are shutting down. Send any wallet address and I will find lending deposits, LP positions, staking, vaults and unfinished bridge withdrawals still on Blast. Read-only: I never ask to connect a wallet or sign anything. Open source: github.com/Lazaniaaa/blast-leftovers' }).catch(() => {});
   return me;
 }
 

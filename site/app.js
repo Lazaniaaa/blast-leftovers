@@ -1,24 +1,36 @@
-import { scan, ETH } from './engine.js';
+import { scan, ETH, abstractWallets } from './engine.js';
+import { CHAINS } from './chains.js';
 import { resolveProtocol } from './protocols.js';
 import { DONATE_ADDRESS, GOAL_USD, loadTally } from './donate.js';
 
-const DEADLINE = new Date('2026-10-26T23:59:59Z');
-const EXAMPLE = '0x0ee09b204ffebf9a1f14c99e242830a09958ba34';
-const SCAN = 'https://blastscan.io';
+const EXAMPLE = CHAINS.blast.example;
+// The chain of the block being rendered: links, explorer and protocol status depend on it
+let CUR = CHAINS.blast;
+let SCAN = CUR.scan;
 
 // ---------- i18n ----------
 const T = {
   en: {
-    h1: 'What did you <em>leave on Blast?</em>',
-    lede: 'Blast is shutting down. Paste an address to find everything still there: lending deposits, LP positions, staking, vaults, locks and bridge withdrawals you never finished.',
+    h1: 'What did you <em>leave on Blast or Abstract?</em>',
+    lede: 'Blast and Abstract are shutting down. Paste an address to find everything still there: lending deposits, LP positions, staking, vaults, locks and bridge withdrawals you never finished. Your Abstract Global Wallet is found automatically.',
     scan: 'Scan address',
     hintNoConnect: '<b>No wallet connection.</b> Read-only, runs in your browser.',
     example: 'Try an example address',
-    deadline: (d) => d > 0 ? `UI withdrawals close Oct 26 · ${d} day${d === 1 ? '' : 's'} left` : 'UI deadline passed · use the L1 contract',
+    deadline: (name, label, d) => d > 0 ? `${name} closes ${label} · ${d} day${d === 1 ? '' : 's'}` : `${name}: deadline passed`,
+    closes: (label, d) => d > 0 ? `closes ${label} · ${d}d left` : 'deadline passed',
+    chainAll: 'All chains', agwLookup: 'looking for your Abstract Global Wallet…',
+    agwHead: 'Abstract Global Wallet', signerHead: 'signer address',
+    agwNote: (s) => `Found automatically: this smart wallet belongs to the signer ${s} you pasted.`,
+    foundAll: 'Found on all chains', bridgeDone: (n) => `${n} bridge withdrawal(s) already finalized.`,
+    gBridgeNoteAbs: 'You started these withdrawals to Ethereum. "Ready to claim" means the batch is on Ethereum but nobody claimed the funds yet: claim them through the official migration page. "Waiting" means the batch is not on Ethereum yet (usually about 3 hours).',
+    gWalletNoteAbs: 'Plain balances. Swap or bridge them out before Dec 15. Tokens that exist only on Abstract can be sold only while the chain runs.',
+    gNftNoteAbs: 'NFTs on Abstract cannot be bridged in general. Whether a collection moves depends on its project; check their announcements.',
+    gUnknownNoteAbs: 'Tokens without a market price. If they exist only on Abstract, sell them before Dec 15 or they are lost.',
+    insolvent: 'insolvent here',
     invalid: 'That is not a valid EVM address. It should start with 0x and have 40 hex characters.',
     failed: 'Scan failed: ',
     retry: 'Public APIs sometimes rate-limit. Wait a few seconds and scan again.',
-    found: 'Found on Blast', wallet: 'In wallet', positions: 'In protocols', debt: 'Debt', possible: 'Probably still deposited', bridge: 'Bridge, unfinished',
+    found: (n) => `Found on ${n}`, wallet: 'In wallet', positions: 'In protocols', debt: 'Debt', possible: 'Probably still deposited', bridge: 'Bridge, unfinished',
     openDebank: 'DeBank', openScan: 'Blastscan', share: 'Copy link', copied: 'Copied',
     gBridge: 'Unfinished bridge withdrawals', gBridgeNote: 'You started these withdrawals to Ethereum but they were never finalized. The ETH is waiting in the Blast portal on L1. Finish them with the official bridge, or through the L1 contract after Oct 26.',
     gLend: 'Lending, vaults and collateral', gLendNote: 'Values come from the receipt tokens you hold, converted to the underlying asset. Repay debt before you withdraw collateral.',
@@ -35,39 +47,39 @@ const T = {
     tx: 'Transaction', explorer: 'Explorer', noPrice: 'no price', yours: 'your contract',
     conf: { high: 'confirmed', medium: 'likely', low: 'unlikely' },
     deposited: 'deposited', withdrawn: 'withdrawn', last: 'last deposit',
-    st: { initiated: 'not proven', proven: 'proven, not finalized', finalized: 'done', unknown: 'unknown' },
+    st: { initiated: 'not proven', proven: 'proven, not finalized', finalized: 'done', unknown: 'unknown', waiting: 'waiting for Ethereum', claimable: 'ready to claim' },
     initiated: 'started', provenAt: 'proven',
     finishBridge: 'Official bridge', portal: 'L1 portal contract',
-    nothing: 'Nothing found on Blast for this address. If you used a smart wallet or a Safe, scan that address too.',
+    nothing: (n) => `Nothing found on ${n} for this address. If you used a smart wallet or a Safe, scan that address too.`,
     debankT: 'Cross-check with DeBank',
     debankNote: 'DeBank lists protocol positions it knows about. Its API needs your own DeBank Cloud AccessKey. The key is saved only in this browser and sent only to DeBank.',
-    debankBtn: 'Load from DeBank', debankKey: 'DeBank Cloud AccessKey', debankNone: 'DeBank shows no Blast protocol positions for this address.',
+    debankBtn: 'Load from DeBank', debankKey: 'DeBank Cloud AccessKey', debankNone: 'DeBank shows no Blast or Abstract protocol positions for this address.',
     debankErr: 'DeBank request failed: ',
     how1t: 'Receipt tokens', how1: 'Every token you ever received is checked. aTokens, cTokens, LP tokens and ERC-4626 shares are converted to the assets behind them.',
     how2t: 'Money that never came back', how2: 'Transactions where tokens or ETH went into a contract and nothing came back are grouped by contract, then checked against what the contract still holds.',
-    how3t: 'LP NFTs and locks', how3: 'Thruster, Blasterswap, Fenix and other concentrated positions are valued from the pool price, including NFTs sitting in farms. Vote-escrow locks are read too.',
-    how5t: 'Separate wallets', how5: 'Blast Mobile, AgentFi agents and Safe multisigs use their own addresses. Positions there do not show up on your main wallet, so scan those addresses too.',
-    how4t: 'Bridge withdrawals', how4: 'Every withdrawal you started on Blast is looked up in the Blast portal on Ethereum to see whether it was proven and finalized.',
-    phish: 'Blast is full of fake "claim" sites right now. This page never asks you to connect a wallet or sign anything. Only use protocol links you can verify.',
-    disclaimer: 'Unofficial community tool, not affiliated with Blast or any protocol listed. Data: Blast RPC, Routescan, DefiLlama, Ethereum RPC. Heuristic results can be wrong; verify on the explorer before acting.',
+    how3t: 'LP NFTs and locks', how3: 'Thruster, Blasterswap, SakuraSwap, Aborean and other concentrated positions are valued from the pool price, including NFTs sitting in farms. Vote-escrow locks are read too.',
+    how5t: 'Separate wallets', how5: 'On Abstract your Abstract Global Wallet is derived from your signer address and scanned automatically. Blast Mobile, AgentFi agents and Safe multisigs use their own addresses, so scan those too.',
+    how4t: 'Bridge withdrawals', how4: 'Every withdrawal you started on Blast or Abstract is looked up on Ethereum to see whether it was proven, finalized or still waits to be claimed.',
+    phish: 'Blast and Abstract are full of fake "claim" and "migration" sites right now. This page never asks you to connect a wallet or sign anything. Only use protocol links you can verify.',
+    disclaimer: 'Unofficial community tool, not affiliated with Blast, Abstract or any protocol listed. Data: Blast and Abstract RPCs, Routescan, Abstract block explorer, DefiLlama, Ethereum RPC. Heuristic results can be wrong; verify on the explorer before acting.',
     stream: 'Vesting stream', streamNow: 'withdrawable now',
     themeAuto: 'Auto', themeLight: 'Light', themeDark: 'Dark',
     limT: 'Known limitations (beta)',
-    lim1: 'Open positions in SynFutures, Particle LAMM, INIT (position NFTs) and Mangrove are not decoded yet. Margin in SynFutures is shown.',
-    lim2: 'Blast Mobile and AgentFi smart wallets have their own addresses. Paste them separately.',
+    lim1: 'Open positions in SynFutures, Particle LAMM, INIT (position NFTs) and Mangrove are not decoded yet. Margin in SynFutures is shown. On Abstract, balances inside games and apps are not read.',
+    lim2: 'Blast Mobile and AgentFi smart wallets have their own addresses. Paste them separately. Abstract Global Wallets are found automatically.',
     lim3: 'Very active wallets take about a minute, and only the latest 20,000 records of history are checked.',
-    lim4: 'The page relies on free public APIs (Routescan, public RPCs, DefiLlama). If Blast RPCs go offline early, scans will stop working.',
+    lim4: 'The page relies on free public APIs (Routescan, the Abstract explorer, public RPCs, DefiLlama). If a chain’s RPC goes offline early, its scans stop working.',
     lim5: 'Results come partly from heuristics and can be wrong. Check the contract on the explorer before you act.',
     donateBtn: '💍 Donate', donateFooter: '💍 Support this tool',
     donateT: 'Found something? 🎉',
     donateText: '🙏 If this saved you some forgotten bags, tip the dev! 💍 Every donation goes toward buying one OCH Ringbearer 🧙‍♂️✨ (not set in stone: if it adds up to 2 or more, I’ll probably grab more 😏)',
-    evmNote: 'This is an EVM address. Send ETH, USDC or USDT on Ethereum, Base, BNB Chain, Arbitrum, Robinhood Chain, Monad, Polygon, Avalanche, Arc, Plasma, OP Mainnet or Blast. Double-check the address after pasting.',
+    evmNote: 'This is an EVM address. Send ETH, USDC or USDT on Ethereum, Base, BNB Chain, Arbitrum, Robinhood Chain, Monad, Polygon, Avalanche, Arc, Plasma, OP Mainnet, Blast or Abstract. Double-check the address after pasting.',
     copyAddr: 'Copy address', seeCollection: 'OCH Ringbearer on OpenSea ↗', close: 'Close',
-    raised: 'Raised for the Ringbearer', tallyLoading: 'Checking 12 networks…', tallyFail: 'Could not load the total right now.', goal: 'goal',
+    raised: 'Raised for the Ringbearer', tallyLoading: 'Checking 13 networks…', tallyFail: 'Could not load the total right now.', goal: 'goal',
     spentOn: 'Already spent on the Ringbearer:',
-    shareTitle: (v) => `You found ${v} on Blast 🎉`,
-    shareText: 'Help others check theirs before Oct 26. Here is a ready post, edit it if you like. Your address is not in it.',
-    shareDebt: (d) => `Your debt of ${d} is already subtracted, so the number is a bit lower than "Found on Blast".`,
+    shareTitle: (v, chains) => `You found ${v} on ${chains} 🎉`,
+    shareText: 'Help others check theirs before the deadline. Here is a ready post, edit it if you like. Your address is not in it.',
+    shareDebt: (d) => `Your debt of ${d} is already subtracted, so the number is a bit lower than "Found".`,
     sharePost: 'Post on X ↗', shareCopy: 'Copy text', shareLater: 'Not now', shareBtn: 'Share on X',
     tallyChecked: (n) => `Live balance of the donation wallet across ${n} networks.`,
     tallyPartial: (ok, n, list) => `Checked ${ok} of ${n} networks. Not responding: ${list}. The real total may be higher.`,
@@ -78,16 +90,26 @@ const T = {
     other: 'Other', yourSafe: 'Your Safe (multisig)', scanThis: 'Scan this address',
   },
   uk: {
-    h1: 'Що ти <em>залишив на Blast?</em>',
-    lede: 'Blast закривається. Встав адресу й побачиш усе, що там лишилось: депозити в лендінгах, LP-позиції, стейкінг, волти, локи та незавершені виводи через міст.',
+    h1: 'Що ти <em>залишив на Blast чи Abstract?</em>',
+    lede: 'Blast і Abstract закриваються. Встав адресу й побачиш усе, що там лишилось: депозити в лендінгах, LP-позиції, стейкінг, волти, локи та незавершені виводи через міст. Abstract Global Wallet знаходиться автоматично.',
     scan: 'Перевірити',
     hintNoConnect: '<b>Без підключення гаманця.</b> Лише читання, все працює у твоєму браузері.',
     example: 'Спробувати на прикладі',
-    deadline: (d) => d > 0 ? `Вивід через UI до 26 жовтня · лишилось ${d} дн.` : 'Дедлайн UI минув · вивід через L1-контракт',
+    deadline: (name, label, d) => d > 0 ? `${name} закривається ${label} · ${d} дн.` : `${name}: дедлайн минув`,
+    closes: (label, d) => d > 0 ? `закривається ${label} · лишилось ${d} дн.` : 'дедлайн минув',
+    chainAll: 'Усі мережі', agwLookup: 'шукаю твій Abstract Global Wallet…',
+    agwHead: 'Abstract Global Wallet', signerHead: 'адреса signer',
+    agwNote: (s) => `Знайдено автоматично: цей смарт-гаманець належить signer-адресі ${s}, яку ти вставив.`,
+    foundAll: 'Знайдено в усіх мережах', bridgeDone: (n) => `Уже завершених виводів через міст: ${n}.`,
+    gBridgeNoteAbs: 'Ти почав ці виводи в Ethereum. «Можна заклеймити» означає, що батч уже в Ethereum, але кошти ніхто не забрав: заклейми їх через офіційну сторінку міграції. «Чекає Ethereum» означає, що батч ще не в Ethereum (зазвичай близько 3 годин).',
+    gWalletNoteAbs: 'Звичайні баланси. Обміняй або виведи їх до 15 грудня. Токени, що існують лише на Abstract, можна продати тільки поки мережа працює.',
+    gNftNoteAbs: 'NFT з Abstract загалом не переносяться мостом. Чи переїде колекція, вирішує її проєкт: дивись їхні анонси.',
+    gUnknownNoteAbs: 'Токени без ринкової ціни. Якщо вони є лише на Abstract, продай їх до 15 грудня, інакше вони пропадуть.',
+    insolvent: 'тут неплатоспроможний',
     invalid: 'Це не схоже на EVM-адресу. Вона має починатися з 0x і мати 40 hex-символів.',
     failed: 'Помилка сканування: ',
     retry: 'Публічні API іноді обмежують запити. Зачекай кілька секунд і спробуй ще раз.',
-    found: 'Знайдено на Blast', wallet: 'На гаманці', positions: 'У протоколах', debt: 'Борг', possible: 'Ймовірно ще в депозитах', bridge: 'Міст, не завершено',
+    found: (n) => `Знайдено на ${n}`, wallet: 'На гаманці', positions: 'У протоколах', debt: 'Борг', possible: 'Ймовірно ще в депозитах', bridge: 'Міст, не завершено',
     openDebank: 'DeBank', openScan: 'Blastscan', share: 'Скопіювати посилання', copied: 'Скопійовано',
     gBridge: 'Незавершені виводи через міст', gBridgeNote: 'Ти почав ці виводи в Ethereum, але не завершив їх. ETH чекає в порталі Blast на L1. Заверши через офіційний міст або напряму через L1-контракт після 26 жовтня.',
     gLend: 'Лендінги, волти та застава', gLendNote: 'Суми рахуються з receipt-токенів на гаманці й переводяться в базовий актив. Спершу поверни борг, потім виводь заставу.',
@@ -104,39 +126,39 @@ const T = {
     tx: 'Транзакція', explorer: 'Експлорер', noPrice: 'немає ціни', yours: 'твій контракт',
     conf: { high: 'підтверджено', medium: 'ймовірно', low: 'малоймовірно' },
     deposited: 'внесено', withdrawn: 'виведено', last: 'останній депозит',
-    st: { initiated: 'не доведено (prove)', proven: 'доведено, не фіналізовано', finalized: 'завершено', unknown: 'невідомо' },
+    st: { initiated: 'не доведено (prove)', proven: 'доведено, не фіналізовано', finalized: 'завершено', unknown: 'невідомо', waiting: 'чекає Ethereum', claimable: 'можна заклеймити' },
     initiated: 'почато', provenAt: 'prove',
     finishBridge: 'Офіційний міст', portal: 'L1-контракт порталу',
-    nothing: 'Для цієї адреси на Blast нічого не знайдено. Якщо ти користувався смарт-гаманцем або Safe, перевір і ту адресу.',
+    nothing: (n) => `Для цієї адреси на ${n} нічого не знайдено. Якщо ти користувався смарт-гаманцем або Safe, перевір і ту адресу.`,
     debankT: 'Звірити з DeBank',
     debankNote: 'DeBank показує позиції в протоколах, які він знає. Його API потребує твого власного AccessKey з DeBank Cloud. Ключ зберігається лише в цьому браузері й надсилається лише в DeBank.',
-    debankBtn: 'Завантажити з DeBank', debankKey: 'AccessKey DeBank Cloud', debankNone: 'DeBank не бачить позицій у протоколах Blast для цієї адреси.',
+    debankBtn: 'Завантажити з DeBank', debankKey: 'AccessKey DeBank Cloud', debankNone: 'DeBank не бачить позицій у протоколах Blast чи Abstract для цієї адреси.',
     debankErr: 'Помилка запиту до DeBank: ',
     how1t: 'Receipt-токени', how1: 'Перевіряється кожен токен, який ти коли-небудь отримував. aTokens, cTokens, LP-токени та ERC-4626 частки переводяться в активи, що за ними стоять.',
     how2t: 'Гроші, що не повернулися', how2: 'Транзакції, де токени чи ETH пішли в контракт і нічого не повернулося, групуються по контракту і звіряються з тим, що контракт досі тримає.',
-    how3t: 'LP NFT та локи', how3: 'Позиції Thruster, Blasterswap, Fenix та інших рахуються за ціною пулу, включно з NFT у фармах. Також читаються vote-escrow локи.',
-    how5t: 'Окремі гаманці', how5: 'Blast Mobile, агенти AgentFi та Safe-мультисиги мають власні адреси. Позиції там не видно на основному гаманці, тому перевір і ці адреси.',
-    how4t: 'Виводи через міст', how4: 'Кожен вивід, який ти почав на Blast, перевіряється в порталі Blast на Ethereum: чи був prove і finalize.',
-    phish: 'Зараз на Blast повно фейкових «claim»-сайтів. Ця сторінка ніколи не просить підключити гаманець чи щось підписати. Користуйся лише посиланнями, які можеш перевірити.',
-    disclaimer: 'Неофіційний інструмент спільноти, не пов’язаний з Blast чи протоколами зі списку. Дані: Blast RPC, Routescan, DefiLlama, Ethereum RPC. Евристика може помилятися, перевіряй в експлорері перед діями.',
+    how3t: 'LP NFT та локи', how3: 'Позиції Thruster, Blasterswap, SakuraSwap, Aborean та інших рахуються за ціною пулу, включно з NFT у фармах. Також читаються vote-escrow локи.',
+    how5t: 'Окремі гаманці', how5: 'На Abstract твій Abstract Global Wallet виводиться з адреси signer і сканується автоматично. Blast Mobile, агенти AgentFi та Safe-мультисиги мають власні адреси, тож перевір і їх.',
+    how4t: 'Виводи через міст', how4: 'Кожен вивід, який ти почав на Blast чи Abstract, перевіряється в Ethereum: чи був prove, finalize, чи він ще чекає клейму.',
+    phish: 'Зараз довкола Blast і Abstract повно фейкових «claim»- і «migration»-сайтів. Ця сторінка ніколи не просить підключити гаманець чи щось підписати. Користуйся лише посиланнями, які можеш перевірити.',
+    disclaimer: 'Неофіційний інструмент спільноти, не пов’язаний з Blast, Abstract чи протоколами зі списку. Дані: RPC Blast і Abstract, Routescan, експлорер Abstract, DefiLlama, Ethereum RPC. Евристика може помилятися, перевіряй в експлорері перед діями.',
     stream: 'Вестинг-стрім', streamNow: 'можна вивести зараз',
     themeAuto: 'Авто', themeLight: 'Світла', themeDark: 'Темна',
     limT: 'Відомі обмеження (бета)',
-    lim1: 'Відкриті позиції в SynFutures, Particle LAMM, INIT (NFT позицій) і Mangrove поки не розбираються. Маржа в SynFutures показується.',
-    lim2: 'Смарт-гаманці Blast Mobile та AgentFi мають власні адреси. Встав їх окремо.',
+    lim1: 'Відкриті позиції в SynFutures, Particle LAMM, INIT (NFT позицій) і Mangrove поки не розбираються. Маржа в SynFutures показується. На Abstract баланси всередині ігор і застосунків не читаються.',
+    lim2: 'Смарт-гаманці Blast Mobile та AgentFi мають власні адреси, встав їх окремо. Abstract Global Wallet знаходиться автоматично.',
     lim3: 'Дуже активні гаманці скануються близько хвилини, і перевіряються лише останні 20 000 записів історії.',
-    lim4: 'Сторінка працює на безкоштовних публічних API (Routescan, публічні RPC, DefiLlama). Якщо RPC Blast вимкнуть раніше, сканування перестане працювати.',
+    lim4: 'Сторінка працює на безкоштовних публічних API (Routescan, експлорер Abstract, публічні RPC, DefiLlama). Якщо RPC мережі вимкнуть раніше, її сканування перестане працювати.',
     lim5: 'Частина результатів — евристика, тож можливі помилки. Перевір контракт в експлорері перед діями.',
     donateBtn: '💍 Донат', donateFooter: '💍 Підтримати проєкт',
     donateT: 'Знайшов щось? 🎉',
     donateText: '🙏 Якщо застосунок допоміг знайти забуті гроші, підкинь трохи розробнику! 💍 Усі донати підуть на покупку одного OCH Ringbearer 🧙‍♂️✨ (але це не точно: якщо збереться на 2 і більше, мабуть, куплю більше 😏)',
-    evmNote: 'Це EVM-адреса. Можна надсилати ETH, USDC чи USDT в Ethereum, Base, BNB Chain, Arbitrum, Robinhood Chain, Monad, Polygon, Avalanche, Arc, Plasma, OP Mainnet чи Blast. Перевір адресу після вставки.',
+    evmNote: 'Це EVM-адреса. Можна надсилати ETH, USDC чи USDT в Ethereum, Base, BNB Chain, Arbitrum, Robinhood Chain, Monad, Polygon, Avalanche, Arc, Plasma, OP Mainnet, Blast чи Abstract. Перевір адресу після вставки.',
     copyAddr: 'Скопіювати адресу', seeCollection: 'OCH Ringbearer на OpenSea ↗', close: 'Закрити',
-    raised: 'Зібрано на Ringbearer', tallyLoading: 'Перевіряю 12 мереж…', tallyFail: 'Зараз не вдалося завантажити суму.', goal: 'ціль',
+    raised: 'Зібрано на Ringbearer', tallyLoading: 'Перевіряю 13 мереж…', tallyFail: 'Зараз не вдалося завантажити суму.', goal: 'ціль',
     spentOn: 'Вже витрачено на Ringbearer:',
-    shareTitle: (v) => `Ти знайшов ${v} на Blast 🎉`,
-    shareText: 'Допоможи іншим перевірити свої гаманці до 26 жовтня. Ось готовий пост, можеш його змінити. Твоєї адреси в ньому немає.',
-    shareDebt: (d) => `Борг ${d} уже віднято, тому сума трохи менша, ніж «Знайдено на Blast».`,
+    shareTitle: (v, chains) => `Ти знайшов ${v} на ${chains} 🎉`,
+    shareText: 'Допоможи іншим перевірити свої гаманці до дедлайну. Ось готовий пост, можеш його змінити. Твоєї адреси в ньому немає.',
+    shareDebt: (d) => `Борг ${d} уже віднято, тому сума трохи менша, ніж «Знайдено».`,
     sharePost: 'Запостити в X ↗', shareCopy: 'Скопіювати текст', shareLater: 'Не зараз', shareBtn: 'Поділитися в X',
     tallyChecked: (n) => `Поточний баланс донат-гаманця в ${n} мережах.`,
     tallyPartial: (ok, n, list) => `Перевірено ${ok} з ${n} мереж. Не відповіли: ${list}. Реальна сума може бути більшою.`,
@@ -152,15 +174,17 @@ let saved = null;
 try { saved = localStorage.getItem('bl-lang'); } catch { /* storage optional */ }
 lang = saved || ((navigator.language || '').startsWith('uk') ? 'uk' : 'en');
 const t = (k) => T[lang][k];
+const dl = (c) => new Date(c.deadline).toLocaleDateString(lang === 'uk' ? 'uk-UA' : 'en-US', { month: 'short', day: 'numeric', timeZone: 'UTC' });
 
 function applyLang() {
   document.documentElement.lang = lang === 'uk' ? 'uk' : 'en';
   document.querySelectorAll('[data-i18n]').forEach((el) => { el.textContent = t(el.dataset.i18n); });
   document.querySelectorAll('[data-i18n-html]').forEach((el) => { el.innerHTML = t(el.dataset.i18nHtml); });
   document.querySelectorAll('[data-lang]').forEach((b) => b.setAttribute('aria-pressed', String(b.dataset.lang === lang)));
-  const days = Math.ceil((DEADLINE - Date.now()) / 86400000);
-  document.getElementById('deadline').textContent = t('deadline')(days);
-  if (lastResult) render(lastResult);
+  document.getElementById('deadline').textContent = Object.values(CHAINS)
+    .map((c) => t('deadline')(c.name, dl(c), Math.ceil((new Date(c.deadline) - Date.now()) / 86400000))).join('  ·  ');
+  document.querySelectorAll('[data-i18n-chain-all]').forEach((el) => { el.textContent = t('chainAll'); });
+  if (lastResults) renderAll(lastResults);
   renderTally();
 }
 let theme = 'auto';
@@ -204,6 +228,7 @@ function amt(n) {
 }
 const sum = (arr) => arr.reduce((s, x) => s + (x.usd || 0), 0);
 const scanAddr = (a, anchor = '') => `${SCAN}/address/${a}${anchor}`;
+const nftUrl = (c, id) => `${SCAN}/nft/${c}/${id}`;
 
 function protoBits(row, contractForWithdraw, { fallbackChip = true } = {}) {
   const p = resolveProtocol(row.protocol, row.name, row.receipt, row.collection, row.contractLabel, row.heldByLabel);
@@ -212,6 +237,7 @@ function protoBits(row, contractForWithdraw, { fallbackChip = true } = {}) {
   if (p) {
     chips.push(`<span class="chip proto">${esc(p.name)}</span>`);
     if (p.dead) chips.push(`<span class="chip dead">${t('siteDown')}</span>`);
+    if (p.insolvent?.includes(CUR.key)) chips.push(`<span class="chip crit">${t('insolvent')}</span>`);
     if (p.url && !p.dead) links.push(`<a class="act" href="${esc(p.url)}" target="_blank" rel="noopener noreferrer">${t('openApp')} ↗</a>`);
     if (p.dead && contractForWithdraw) links.push(`<a class="act" href="${scanAddr(contractForWithdraw, '#writeContract')}" target="_blank" rel="noopener noreferrer">${t('viaContract')} ↗</a>`);
     if (p.slug) links.push(`<a href="https://defillama.com/protocol/${esc(p.slug)}" target="_blank" rel="noopener noreferrer">${t('defillama')}</a>`);
@@ -244,10 +270,72 @@ function collapsible(title, total, inner, note = '') {
 }
 
 // ---------- render ----------
-let lastResult = null;
-function render(r) {
-  lastResult = r;
-  r = { ...r, vaults: r.vaults.filter(notDust), debts: r.debts.filter(notDust), lp: r.lp.filter(notDust), wallet: r.wallet.filter(notDust) };
+let lastResults = null;
+const trimDust = (r) => ({ ...r, vaults: r.vaults.filter(notDust), debts: r.debts.filter(notDust), lp: r.lp.filter(notDust), wallet: r.wallet.filter(notDust) });
+const foundOf = (r) => r.totals.wallet + r.totals.positions + r.totals.possible + r.totals.bridgePending;
+const isEmpty = (r) => {
+  const depsGood = r.deposits.filter((d) => d.confidence !== 'low');
+  return !r.wallet.length && !r.vaults.length && !r.lp.length && !r.nftPositions.length && !r.locks.length && !depsGood.length && !r.bridge.some((b) => b.status !== 'finalized') && !r.debts.length;
+};
+
+function blockTitle(r) {
+  const c = CHAINS[r.chain];
+  if (r.chain === 'abstract' && r.kind === 'agw') return `${c.name} · ${t('agwHead')}`;
+  if (r.chain === 'abstract' && r.kind === 'eoa' && r.hasAgw) return `${c.name} · ${t('signerHead')}`;
+  return c.name;
+}
+
+function renderAll(results) {
+  lastResults = results;
+  const blocks = results.filter((r) => !r.error).map(trimDust);
+  // the signer of an Abstract Global Wallet is shown only when it holds something itself
+  const agwFound = blocks.some((r) => r.chain === 'abstract' && r.kind === 'agw');
+  blocks.forEach((r) => { if (r.chain === 'abstract' && r.kind === 'eoa') r.hasAgw = agwFound; });
+  const visible = blocks.filter((r) => !(r.hasAgw && isEmpty(r)));
+  const input = results[0]?.input || results[0]?.address;
+  const total = visible.reduce((s, r) => s + foundOf(r), 0);
+  const share = shareAmountAll(results);
+
+  const out = [];
+  out.push(`<section class="summary">
+    <div class="addr-line"><span class="addr">${esc(input)}</span>
+      <span class="ext">
+        <a class="strong" href="https://debank.com/profile/${input}" target="_blank" rel="noopener noreferrer">${t('openDebank')} ↗</a>
+        <a href="#" id="shareLink">${t('share')}</a>
+        ${share >= SHARE_MIN_USD && !results.every(isExample) ? `<a class="strong" href="#" id="shareOpen">${t('shareBtn')} ↗</a>` : ''}
+      </span></div>
+    <div class="figures">
+      <div class="fig big"><span class="k">${visible.length > 1 ? t('foundAll') : t('found')(CHAINS[visible[0]?.chain || 'blast'].name)}</span><span class="v">${usdPlain(total)}</span></div>
+      ${visible.length > 1 ? visible.map((r) => `<div class="fig"><span class="k">${esc(blockTitle(r))}</span><span class="v">${usdPlain(foundOf(r))}</span></div>`).join('') : ''}
+    </div>
+  </section>`);
+
+  for (const e of results.filter((r) => r.error)) {
+    out.push(`<p class="error">${esc(CHAINS[e.chain].name)}: ${t('failed')}${esc(e.error.shortMessage || e.error.message)}<br>${t('retry')}</p>`);
+  }
+  visible.forEach((r, i) => out.push(renderBlock(r, i, visible.length > 1)));
+
+  // DeBank (one panel for all chains)
+  out.push(`<section class="group debank" id="debank">
+    <div class="group-head"><h2>${t('debankT')}</h2></div>
+    <p class="group-note">${t('debankNote')}</p>
+    <div class="keyrow"><input id="dbkey" type="password" placeholder="${t('debankKey')}" autocomplete="off" value="${esc(getKey())}"><button class="btn ghost" id="dbbtn" type="button">${t('debankBtn')}</button></div>
+    <div id="dbout"></div>
+  </section>`);
+
+  document.getElementById('results').innerHTML = out.join('');
+  document.getElementById('shareLink')?.addEventListener('click', async (e) => {
+    e.preventDefault();
+    const url = location.origin + location.pathname + '?a=' + input + (chainSel !== 'all' ? '&chain=' + chainSel : '');
+    try { await navigator.clipboard.writeText(url); e.target.textContent = t('copied'); } catch { prompt?.('', url); }
+  });
+  document.getElementById('dbbtn')?.addEventListener('click', () => loadDebank(input));
+  document.getElementById('shareOpen')?.addEventListener('click', (e) => { e.preventDefault(); openShare(results); });
+}
+
+function renderBlock(r, idx, multi) {
+  CUR = CHAINS[r.chain];
+  SCAN = CUR.scan;
   const out = [];
   const pendingBridge = r.bridge.filter((b) => b.status !== 'finalized');
   const doneBridge = r.bridge.filter((b) => b.status === 'finalized');
@@ -255,18 +343,24 @@ function render(r) {
   const depsLow = r.deposits.filter((d) => d.confidence === 'low');
   const positions = r.totals.positions + r.totals.possible;
   const likely = r.totals.likely || 0;
-  const found = r.totals.wallet + positions + r.totals.bridgePending;
+  const days = Math.ceil((new Date(CUR.deadline) - Date.now()) / 86400000);
+  const quiet = isEmpty(r) && !r.nfts.length && !r.unknown.length && !(r.sales || []).length && !depsLow.length && !r.bridge.length;
+  if (quiet) {
+    return `<section class="chain-block" id="chain-${idx}"><div class="chain-head"><h2>${esc(blockTitle(r))}</h2>
+      <span class="chip ${days <= 7 ? 'crit' : 'warn'}">${t('closes')(dl(CUR), days)}</span></div>
+      <p class="empty">${t('nothing')(CUR.name)} <a href="${scanAddr(r.address)}" target="_blank" rel="noopener noreferrer">${CUR.explorerName} ↗</a></p></section>`;
+  }
 
-  out.push(`<section class="summary">
-    <div class="addr-line"><span class="addr">${esc(r.address)}</span>
-      <span class="ext">
-        <a class="strong" href="https://debank.com/profile/${r.address}" target="_blank" rel="noopener noreferrer">${t('openDebank')} ↗</a>
-        <a href="${scanAddr(r.address)}" target="_blank" rel="noopener noreferrer">${t('openScan')} ↗</a>
-        <a href="#" id="shareLink">${t('share')}</a>
-        ${!isExample(r) && shareAmount(r) >= SHARE_MIN_USD ? `<a class="strong" href="#" id="shareOpen">${t('shareBtn')} ↗</a>` : ''}
-      </span></div>
+  out.push(`<section class="chain-block" id="chain-${idx}">
+    <div class="chain-head">
+      <h2>${esc(blockTitle(r))}</h2>
+      <span class="chip ${days <= 7 ? 'crit' : 'warn'}">${t('closes')(dl(CUR), days)}</span>
+    </div>
+    <div class="addr-line"><span class="addr small-addr">${esc(r.address)}</span>
+      <span class="ext"><a href="${scanAddr(r.address)}" target="_blank" rel="noopener noreferrer">${CUR.explorerName} ↗</a></span></div>
+    ${r.kind === 'agw' && r.signer ? `<p class="group-note">${t('agwNote')(short(r.signer))}</p>` : ''}
     <div class="figures">
-      <div class="fig big"><span class="k">${t('found')}</span><span class="v">${usdPlain(found)}</span></div>
+      ${multi ? '' : ''}
       <div class="fig"><span class="k">${t('positions')}</span><span class="v">${usdPlain(positions)}</span></div>
       <div class="fig"><span class="k">${t('wallet')}</span><span class="v">${usdPlain(r.totals.wallet)}</span></div>
       ${likely > 0 ? `<div class="fig"><span class="k">${t('possible')}</span><span class="v">~${usdPlain(likely)}</span></div>` : ''}
@@ -276,18 +370,17 @@ function render(r) {
   </section>`);
 
   // 1. bridge
+  const bridgeLinks = (b) => r.chain === 'abstract'
+    ? [`<a class="act" href="${CUR.bridgeUrl}" target="_blank" rel="noopener noreferrer">${t('finishBridge')} ↗</a>`, `<a href="${SCAN}/tx/${b.txHash}" target="_blank" rel="noopener noreferrer">${t('tx')}</a>`]
+    : [`<a class="act" href="${CUR.bridgeUrl}" target="_blank" rel="noopener noreferrer">${t('finishBridge')} ↗</a>`, `<a href="${SCAN}/tx/${b.txHash}" target="_blank" rel="noopener noreferrer">${t('tx')}</a>`,
+      `<a href="https://etherscan.io/address/0x0Ec68c5B10F21EFFb74f2A5C61DFe6b08C0Db6Cb#writeProxyContract" target="_blank" rel="noopener noreferrer">${t('portal')}</a>`];
   out.push(group({
-    id: 'bridge', urgent: true, title: t('gBridge'), note: t('gBridgeNote'), total: r.totals.bridgePending,
+    id: `bridge-${idx}`, urgent: true, title: t('gBridge'), note: r.chain === 'abstract' ? t('gBridgeNoteAbs') : t('gBridgeNote'), total: r.totals.bridgePending,
     rows: pendingBridge.map((b) => rowHtml({
       title: `${amt(b.amount)} ${esc(b.symbol || 'ETH')}`,
-      chips: [`<span class="chip ${b.status === 'proven' ? 'warn' : 'crit'}">${esc(t('st')[b.status] || b.status)}</span>`],
-      sub: `${t('initiated')} ${b.date}${b.provenAt ? ` · ${t('provenAt')} ${b.provenAt}` : ''} · <span class="mono">${short(b.withdrawalHash)}</span>`,
-      value: usd(b.usd),
-      links: [
-        `<a class="act" href="https://blast.io" target="_blank" rel="noopener noreferrer">${t('finishBridge')} ↗</a>`,
-        `<a href="${SCAN}/tx/${b.txHash}" target="_blank" rel="noopener noreferrer">${t('tx')}</a>`,
-        `<a href="https://etherscan.io/address/0x0Ec68c5B10F21EFFb74f2A5C61DFe6b08C0Db6Cb#writeProxyContract" target="_blank" rel="noopener noreferrer">${t('portal')}</a>`,
-      ],
+      chips: [`<span class="chip ${b.status === 'proven' || b.status === 'waiting' ? 'warn' : 'crit'}">${esc(t('st')[b.status] || b.status)}</span>`],
+      sub: `${t('initiated')} ${b.date}${b.provenAt ? ` · ${t('provenAt')} ${b.provenAt}` : ''} · <span class="mono">${short(b.txHash)}</span>`,
+      value: usd(b.usd), links: bridgeLinks(b),
     })),
   }));
 
@@ -308,7 +401,7 @@ function render(r) {
     const { chips, links } = protoBits(d, d.token);
     lendRows.push(rowHtml({ title: `${t('borrowed')} · ${esc(d.underlyingSymbol || '?')}`, chips, sub: esc(d.name || d.receipt || ''), value: d.usd != null ? `<span style="color:var(--crit)">−${usdPlain(d.usd)}</span>` : usd(null), amount: `${amt(d.amount)} ${esc(d.underlyingSymbol || '')}`, links }));
   }
-  out.push(group({ id: 'lending', title: t('gLend'), note: t('gLendNote'), total: sum(r.vaults) - sum(r.debts), rows: lendRows }));
+  out.push(group({ id: `lending-${idx}`, title: t('gLend'), note: t('gLendNote'), total: sum(r.vaults) - sum(r.debts), rows: lendRows }));
 
   // 3. liquidity
   const lpRows = [];
@@ -321,34 +414,34 @@ function render(r) {
     const { chips, links } = protoBits({ ...x, protocol: x.protocol }, x.heldBy !== 'wallet' ? x.heldBy : x.contract);
     if (x.inRange != null) chips.push(`<span class="chip ${x.inRange ? 'ok' : 'warn'}">${x.inRange ? t('inRange') : t('outRange')}</span>`);
     if (x.heldBy !== 'wallet') chips.push(`<span class="chip warn">${t('inFarm')} ${esc(x.heldByLabel || short(x.heldBy))}</span>`);
-    links.push(`<a href="${SCAN}/nft/${x.contract}/${x.tokenId}" target="_blank" rel="noopener noreferrer">NFT #${esc(x.tokenId)}</a>`);
+    links.push(`<a href="${nftUrl(x.contract, x.tokenId)}" target="_blank" rel="noopener noreferrer">NFT #${esc(x.tokenId)}</a>`);
     if (x.heldBy !== 'wallet') links.push(`<a href="${scanAddr(x.heldBy, '#writeContract')}" target="_blank" rel="noopener noreferrer">${t('viaContract')} ↗</a>`);
     const parts = x.parts || [];
     lpRows.push(rowHtml({ title: `${t('lpv3')} · ${parts.map((p) => esc(p.symbol)).join(' / ')}`, chips, sub: (parts.map((p) => `${amt(p.amount)} ${esc(p.symbol)}`).join(' + ')) + (x.note ? ` · ${esc(x.note)}` : ''), value: usd(x.usd), links }));
   }
-  out.push(group({ id: 'lp', title: t('gLp'), note: t('gLpNote'), total: sum(r.lp) + sum(r.nftPositions), rows: lpRows }));
+  out.push(group({ id: `lp-${idx}`, title: t('gLp'), note: t('gLpNote'), total: sum(r.lp) + sum(r.nftPositions), rows: lpRows }));
 
   // 4. staked / locked / deposited
   const stRows = [];
   for (const l of r.locks) {
     const { chips, links } = protoBits(l, l.contract);
     chips.push(l.stream ? `<span class="chip ok">${t('streamNow')}</span>` : `<span class="chip ${l.unlocked ? 'ok' : 'warn'}">${l.unlock === 'permanent' ? t('permanent') : `${l.unlocked ? t('unlocked') : t('unlocks')} ${l.unlock}`}</span>`);
-    links.push(`<a href="${SCAN}/nft/${l.contract}/${l.tokenId}" target="_blank" rel="noopener noreferrer">NFT #${esc(l.tokenId)}</a>`);
+    links.push(`<a href="${nftUrl(l.contract, l.tokenId)}" target="_blank" rel="noopener noreferrer">NFT #${esc(l.tokenId)}</a>`);
     stRows.push(rowHtml({ title: `${l.stream ? t('stream') : t('lock')} · ${esc(l.symbol || '?')}`, chips, sub: esc(l.collection || ''), value: usd(l.usd), amount: `${amt(l.amount)} ${esc(l.symbol || '')}`, links }));
   }
   for (const d of depsGood) stRows.push(depositRow(d));
-  out.push(group({ id: 'staked', title: t('gStake'), note: t('gStakeNote'), total: sum(r.locks) + sum(depsGood), rows: stRows }));
+  out.push(group({ id: `staked-${idx}`, title: t('gStake'), note: t('gStakeNote'), total: sum(r.locks) + sum(depsGood), rows: stRows }));
 
   // 4b. potential token sales (not counted as found money)
   const sales = r.sales || [];
   const salesOpen = sales.filter((s) => s.status === 'unclaimed');
   const salesDone = sales.filter((s) => s.status !== 'unclaimed');
-  if (salesOpen.length) out.push(group({ id: 'sales', title: t('gSales'), note: t('gSalesNote'), rows: salesOpen.map(saleRow) }));
+  if (salesOpen.length) out.push(group({ id: `sales-${idx}`, title: t('gSales'), note: t('gSalesNote'), rows: salesOpen.map(saleRow) }));
   if (salesDone.length) out.push(`<section class="group">${collapsible(t('gSales'), String(salesDone.length), `<div class="rows">${salesDone.map(saleRow).join('')}</div>`, t('gSalesNote'))}</section>`);
 
   // 5. wallet
   out.push(group({
-    id: 'wallet', title: t('gWallet'), note: t('gWalletNote'), total: r.totals.wallet,
+    id: `wallet-${idx}`, title: t('gWallet'), note: r.chain === 'abstract' ? t('gWalletNoteAbs') : t('gWalletNote'), total: r.totals.wallet,
     rows: r.wallet.map((w) => rowHtml({
       title: esc(w.symbol), chips: w.token === ETH ? [] : protoBits(w, null, { fallbackChip: false }).chips, sub: w.token === ETH ? 'Native ETH' : `${esc(w.name)} · <span class="mono">${short(w.token)}</span>`,
       value: usd(w.usd), amount: `${amt(w.amount)} ${esc(w.symbol)}`,
@@ -359,33 +452,15 @@ function render(r) {
   // 6. collapsed extras
   const extras = [];
   if (depsLow.length) extras.push(collapsible(t('gGone'), `${depsLow.length} · ${usdPlain(sum(depsLow))}`, `<div class="rows">${depsLow.map(depositRow).join('')}</div>`, t('gGoneNote')));
-  if (r.unknown.length) extras.push(collapsible(t('gUnknown'), String(r.unknown.length), `<div class="rows">${r.unknown.map((w) => rowHtml({ title: esc(w.symbol), chips: protoBits(w).chips, sub: `${esc(w.name)} · <span class="mono">${short(w.token)}</span>`, value: usd(null), amount: amt(w.amount), links: [`<a href="${SCAN}/token/${w.token}?a=${r.address}" target="_blank" rel="noopener noreferrer">${t('explorer')}</a>`] })).join('')}</div>`));
-  if (r.nfts.length) extras.push(collapsible(t('gNft'), String(r.nfts.length), `<div class="rows nftgrid">${r.nfts.map((n) => rowHtml({ title: esc(n.collection || short(n.contract)), chips: n.heldBy !== 'wallet' ? [`<span class="chip warn">${t('inFarm')} ${esc(n.heldByLabel || short(n.heldBy))}</span>`] : [], sub: `#${esc(n.tokenId)}${n.erc1155 ? ` · ERC-1155 × ${esc(n.count)}` : ''}`, value: '', links: [`<a href="${SCAN}/nft/${n.contract}/${n.tokenId}" target="_blank" rel="noopener noreferrer">${t('explorer')}</a>`] })).join('')}</div>`));
+  if (r.unknown.length) extras.push(collapsible(t('gUnknown'), String(r.unknown.length), `<div class="rows">${r.unknown.map((w) => rowHtml({ title: esc(w.symbol), chips: protoBits(w).chips, sub: `${esc(w.name)} · <span class="mono">${short(w.token)}</span>`, value: usd(null), amount: amt(w.amount), links: [`<a href="${SCAN}/token/${w.token}?a=${r.address}" target="_blank" rel="noopener noreferrer">${t('explorer')}</a>`] })).join('')}</div>`, r.chain === 'abstract' ? t('gUnknownNoteAbs') : ''));
+  if (r.nfts.length) extras.push(collapsible(t('gNft'), String(r.nfts.length), `<div class="rows nftgrid">${r.nfts.map((n) => rowHtml({ title: esc(n.collection || short(n.contract)), chips: n.heldBy !== 'wallet' ? [`<span class="chip warn">${t('inFarm')} ${esc(n.heldByLabel || short(n.heldBy))}</span>`] : [], sub: `#${esc(n.tokenId)}${n.erc1155 ? ` · ERC-1155 × ${esc(n.count)}` : ''}`, value: '', links: [`<a href="${nftUrl(n.contract, n.tokenId)}" target="_blank" rel="noopener noreferrer">${t('explorer')}</a>`] })).join('')}</div>`, r.chain === 'abstract' ? t('gNftNoteAbs') : ''));
   if (r.spam.length) extras.push(collapsible(t('gSpam'), String(r.spam.length), `<p class="group-note" style="color:var(--crit)">${t('gSpamNote')}</p><div class="rows">${r.spam.slice(0, 200).map((s) => `<div class="row"><div class="row-main"><div class="row-sub mono">${esc(short(s.token))} · ${esc((s.name || '').replace(/https?:\/\/\S+/g, '[link removed]').slice(0, 60))}</div></div></div>`).join('')}</div>`));
   if (extras.length) out.push(`<section class="group">${extras.join('')}</section>`);
 
-  const empty = !r.wallet.length && !r.vaults.length && !r.lp.length && !r.nftPositions.length && !r.locks.length && !depsGood.length && !pendingBridge.length && !r.debts.length;
-  if (empty) out.push(`<p class="empty">${t('nothing')}</p>`);
-  if (doneBridge.length) out.push(`<p class="group-note">✓ ${doneBridge.length} bridge withdrawal(s) already finalized.</p>`);
+  if (isEmpty(r)) out.push(`<p class="empty">${t('nothing')(CUR.name)}</p>`);
+  if (doneBridge.length) out.push(`<p class="group-note">✓ ${t('bridgeDone')(doneBridge.length)}</p>`);
   for (const n of r.notes || []) out.push(`<p class="group-note">${esc(trLog(n))}</p>`);
-
-  // DeBank
-  out.push(`<section class="group debank" id="debank">
-    <div class="group-head"><h2>${t('debankT')}</h2></div>
-    <p class="group-note">${t('debankNote')}</p>
-    <div class="keyrow"><input id="dbkey" type="password" placeholder="${t('debankKey')}" autocomplete="off" value="${esc(getKey())}"><button class="btn ghost" id="dbbtn" type="button">${t('debankBtn')}</button></div>
-    <div id="dbout"></div>
-  </section>`);
-
-  const res = document.getElementById('results');
-  res.innerHTML = out.join('');
-  document.getElementById('shareLink')?.addEventListener('click', async (e) => {
-    e.preventDefault();
-    const url = location.origin + location.pathname + '?a=' + r.address;
-    try { await navigator.clipboard.writeText(url); e.target.textContent = t('copied'); } catch { prompt?.('', url); }
-  });
-  document.getElementById('dbbtn')?.addEventListener('click', () => loadDebank(r.address));
-  document.getElementById('shareOpen')?.addEventListener('click', (e) => { e.preventDefault(); openShare(r); });
+  return out.join('');
 }
 
 function projName(d) {
@@ -434,11 +509,12 @@ async function loadDebank(address) {
   try { localStorage.setItem('bl-debank', key); } catch { /* optional */ }
   box.innerHTML = '<div class="progress"><span class="spinner"></span>DeBank…</div>';
   try {
-    const r = await fetch(`https://pro-openapi.debank.com/v1/user/complex_protocol_list?id=${address}&chain_id=blast`, { headers: { AccessKey: key, accept: 'application/json' } });
+    const r = await fetch(`https://pro-openapi.debank.com/v1/user/all_complex_protocol_list?id=${address}`, { headers: { AccessKey: key, accept: 'application/json' } });
     const j = await r.json();
     if (!r.ok) throw new Error(j.message || r.status);
-    if (!j.length) { box.innerHTML = `<p class="group-note">${t('debankNone')}</p>`; return; }
-    box.innerHTML = '<div class="rows">' + j.map((p) => {
+    const ours = j.filter((p) => /blast|abs/i.test(p.chain || ''));
+    if (!ours.length) { box.innerHTML = `<p class="group-note">${t('debankNone')}</p>`; return; }
+    box.innerHTML = '<div class="rows">' + ours.map((p) => {
       const net = p.portfolio_item_list.reduce((s, i) => s + (i.stats?.net_usd_value || 0), 0);
       const items = p.portfolio_item_list.map((i) => {
         const toks = [...(i.detail?.supply_token_list || []), ...(i.detail?.token_list || [])].map((x) => `${amt(x.amount)} ${esc(x.symbol)}`).join(' + ');
@@ -446,7 +522,7 @@ async function loadDebank(address) {
         return `${esc(i.name)}: ${toks}${debt ? ` · ${debt}` : ''}`;
       }).join('<br>');
       const links = p.site_url ? [`<a class="act" href="${esc(p.site_url)}" target="_blank" rel="noopener noreferrer">${esc(p.site_url.replace(/^https?:\/\//, ''))} ↗</a>`] : [];
-      return rowHtml({ title: esc(p.name), chips: [], sub: items, value: usd(net), links });
+      return rowHtml({ title: esc(p.name), chips: [`<span class="chip">${esc(p.chain)}</span>`], sub: items, value: usd(net), links });
     }).join('') + '</div>';
   } catch (e) {
     box.innerHTML = `<p class="error">${t('debankErr')}${esc(e.message)}</p>`;
@@ -477,29 +553,41 @@ function shareAmount(r) {
   const t0 = r.totals || {};
   return Math.max(0, (t0.wallet || 0) + (t0.positions || 0) + (t0.possible || 0) + (t0.bridgePending || 0) - (t0.debt || 0));
 }
+const EXAMPLES = Object.values(CHAINS).map((c) => c.example).filter(Boolean).map((a) => a.toLowerCase());
+const isExample = (r) => EXAMPLES.includes((r.input || r.address || '').toLowerCase());
+const shareable = (results) => results.filter((r) => !r.error && !isExample(r));
+function shareAmountAll(results) {
+  return shareable(results).reduce((s, r) => s + shareAmount(r), 0);
+}
 const fmtShare = (v) => '$' + v.toLocaleString('en-US', { maximumFractionDigits: v >= 100 ? 0 : 2, minimumFractionDigits: v >= 100 ? 0 : 2 });
-function sharePostText(v) {
-  return `just found ${fmtShare(v)} I forgot on Blast before it shuts down 😳\n\ncheck yours before Oct 26, just paste your address:\n${SITE}\n\nh/t @NotYur`;
+function shareChains(results) {
+  return [...new Set(shareable(results).filter((r) => shareAmount(r) >= 1).map((r) => r.chain))];
+}
+function sharePostText(v, chains) {
+  if (chains.length > 1) return `just found ${fmtShare(v)} I forgot on Blast and Abstract before they shut down 😳\n\ncheck yours, just paste your address:\n${SITE}\n\nh/t @NotYur`;
+  const c = CHAINS[chains[0] || 'blast'];
+  return `just found ${fmtShare(v)} I forgot on ${c.name} before it shuts down 😳\n\ncheck yours before ${c.deadlineLabel}, just paste your address:\n${SITE}\n\nh/t @NotYur`;
 }
 const shareDlg = document.getElementById('shareDlg');
 const shownFor = new Set();
-function openShare(r) {
-  const v = shareAmount(r);
-  const text = sharePostText(v);
-  document.getElementById('share-h').textContent = t('shareTitle')(fmtShare(v));
+function openShare(results) {
+  const v = shareAmountAll(results);
+  const chains = shareChains(results);
+  const text = sharePostText(v, chains);
+  document.getElementById('share-h').textContent = t('shareTitle')(fmtShare(v), chains.map((k) => CHAINS[k].name).join(' + ') || 'Blast');
   document.getElementById('sharePreview').textContent = text;
-  const debt = r.totals?.debt || 0;
+  const debt = shareable(results).reduce((s, r) => s + (r.totals?.debt || 0), 0);
   document.getElementById('shareDebt').textContent = debt >= 0.01 ? t('shareDebt')(fmtShare(debt)) : '';
   document.getElementById('shareDebt').hidden = debt < 0.01;
   document.getElementById('shareX').href = 'https://x.com/intent/post?text=' + encodeURIComponent(text);
   document.getElementById('shareCopy').textContent = t('shareCopy');
   if (typeof shareDlg.showModal === 'function') shareDlg.showModal(); else shareDlg.setAttribute('open', '');
 }
-const isExample = (r) => r.address.toLowerCase() === EXAMPLE.toLowerCase();
-function maybeShare(r) {
-  if (isExample(r) || shownFor.has(r.address) || shareAmount(r) < SHARE_MIN_USD) return;
-  shownFor.add(r.address);
-  setTimeout(() => { if (!document.getElementById('donateDlg').open) openShare(r); }, 1800);
+function maybeShare(results) {
+  const key = (results[0]?.input || '') + '|' + chainSel;
+  if (results.every(isExample) || shownFor.has(key) || shareAmountAll(results) < SHARE_MIN_USD) return;
+  shownFor.add(key);
+  setTimeout(() => { if (!document.getElementById('donateDlg').open) openShare(results); }, 1800);
 }
 document.getElementById('shareClose').addEventListener('click', () => shareDlg.close());
 document.getElementById('shareX').addEventListener('click', () => setTimeout(() => shareDlg.close(), 300));
@@ -573,20 +661,52 @@ const input = document.getElementById('addr');
 const status = document.getElementById('status');
 const btn = document.getElementById('scanBtn');
 
+// Which chains to scan: all (default), blast or abstract. URL ?chain= wins, then an Abstract-only hostname, then the last choice.
+let chainSel = 'all';
+try { chainSel = localStorage.getItem('bl-chain') || 'all'; } catch { /* optional */ }
+if (/abstract/i.test(location.hostname)) chainSel = 'abstract';
+const qChain = new URLSearchParams(location.search).get('chain');
+if (qChain && (qChain === 'all' || CHAINS[qChain])) chainSel = qChain;
+function applyChainSel() {
+  document.querySelectorAll('[data-chain-set]').forEach((b) => b.setAttribute('aria-pressed', String(b.dataset.chainSet === chainSel)));
+}
+document.querySelectorAll('[data-chain-set]').forEach((b) => b.addEventListener('click', () => {
+  chainSel = b.dataset.chainSet;
+  try { localStorage.setItem('bl-chain', chainSel); } catch { /* optional */ }
+  applyChainSel();
+  if (input.value.trim()) run(input.value);
+}));
+applyChainSel();
+
 async function run(address) {
   address = address.trim();
   if (!/^0x[0-9a-fA-F]{40}$/.test(address)) { status.innerHTML = `<p class="error">${t('invalid')}</p>`; return; }
-  history.replaceState(null, '', '?a=' + address);
+  history.replaceState(null, '', '?a=' + address + (chainSel !== 'all' ? '&chain=' + chainSel : ''));
   btn.disabled = true;
   document.getElementById('results').innerHTML = '';
   status.innerHTML = '<div class="progress"><span class="spinner"></span><span id="plog"></span></div>';
   const plog = document.getElementById('plog');
+  const lines = {};
+  const show = () => { plog.innerHTML = Object.entries(lines).map(([k, m]) => `${esc(k)}: ${esc(trLog(m))}`).join('<br>'); };
   try {
-    const r = await scan(address, (m) => { plog.textContent = trLog(m); });
+    const jobs = [];
+    if (chainSel !== 'abstract') jobs.push({ chain: 'blast', address, kind: 'eoa' });
+    if (chainSel !== 'blast') {
+      lines.Abstract = t('agwLookup'); show();
+      const ws = await abstractWallets(address).catch(() => [{ address, kind: 'eoa' }]);
+      ws.forEach((w) => jobs.push({ chain: 'abstract', address: w.address, kind: w.kind, signer: w.signer }));
+      delete lines.Abstract;
+    }
+    const results = await Promise.all(jobs.map((j) => {
+      const tag = j.chain === 'abstract' && jobs.filter((x) => x.chain === 'abstract').length > 1 ? `Abstract (${j.kind === 'agw' ? 'AGW' : 'signer'})` : CHAINS[j.chain].name;
+      return scan(j.address, (m) => { lines[tag] = m; show(); }, { chain: j.chain })
+        .then((r) => ({ ...r, kind: j.kind, signer: j.signer, input: address }))
+        .catch((e) => { console.error(e); return { error: e, chain: j.chain, address: j.address, kind: j.kind, input: address }; });
+    }));
     status.innerHTML = '';
-    render(r);
+    renderAll(results);
     onScanDone();
-    maybeShare(r);
+    maybeShare(results);
   } catch (e) {
     console.error(e);
     status.innerHTML = `<p class="error">${t('failed')}${esc(e.shortMessage || e.message)}<br>${t('retry')}</p>`;

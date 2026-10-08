@@ -1,0 +1,52 @@
+// Chains the scanner supports. Everything chain-specific lives here; engine.js reads only this config.
+import { defineChain } from 'viem';
+
+const blastChain = defineChain({
+  id: 81457, name: 'Blast',
+  nativeCurrency: { name: 'Ether', symbol: 'ETH', decimals: 18 },
+  rpcUrls: { default: { http: ['https://rpc.blast.io'] } },
+  contracts: { multicall3: { address: '0xcA11bde05977b3631167028862bE2a173976CA11' } },
+});
+const abstractChain = defineChain({
+  id: 2741, name: 'Abstract',
+  nativeCurrency: { name: 'Ether', symbol: 'ETH', decimals: 18 },
+  rpcUrls: { default: { http: ['https://api.mainnet.abs.xyz'] } },
+  contracts: { multicall3: { address: '0xAa4De41dba0Ca5dCBb288b7cC6b708F3aaC759E7' } },
+});
+
+export const CHAINS = {
+  blast: {
+    key: 'blast', name: 'Blast', id: 81457, viemChain: blastChain,
+    rpc: ['https://rpc.blast.io', 'https://blast-rpc.publicnode.com'],
+    multicall3: '0xcA11bde05977b3631167028862bE2a173976CA11',
+    // Routescan, Etherscan-compatible, no key, up to 10k rows per call
+    explorerApi: 'https://api.routescan.io/v2/network/mainnet/evm/81457/etherscan/api', pageMax: 10000, historyMax: 20000,
+    scan: 'https://blastscan.io', explorerName: 'Blastscan', llama: 'blast',
+    deadline: '2026-10-26T23:59:59Z', deadlineLabel: 'Oct 26',
+    withdrawals: 'op', bridgeUrl: 'https://blast.io',
+    // L2 contracts a withdrawal can start from
+    bridges: ['0x4300000000000000000000000000000000000005', '0x4200000000000000000000000000000000000010', '0x4200000000000000000000000000000000000016', '0x4200000000000000000000000000000000000007', '0x4200000000000000000000000000000000000014'],
+    // wrapping is not a deposit
+    wrappers: ['0x4300000000000000000000000000000000000004', '0x4300000000000000000000000000000000000003', '0xca11bde05977b3631167028862be2a173976ca11'],
+    example: '0x0ee09b204ffebf9a1f14c99e242830a09958ba34',
+  },
+  abstract: {
+    key: 'abstract', name: 'Abstract', id: 2741, viemChain: abstractChain,
+    rpc: ['https://api.mainnet.abs.xyz'],
+    multicall3: '0xAa4De41dba0Ca5dCBb288b7cC6b708F3aaC759E7',
+    // ZK Stack block explorer API: Etherscan-compatible, no key, max 1000 rows per call
+    explorerApi: 'https://block-explorer-api.mainnet.abs.xyz/api', pageMax: 1000, historyMax: 10000,
+    scan: 'https://abscan.org', explorerName: 'Abscan', llama: 'abstract',
+    deadline: '2026-12-15T23:59:59Z', deadlineLabel: 'Dec 15',
+    withdrawals: 'zk', bridgeUrl: 'https://migrate.abs.xyz',
+    // ETH base token, L2 asset router / shared bridge, legacy shared bridge (from zks_getBridgeContracts)
+    bridges: ['0x000000000000000000000000000000000000800a', '0x0000000000000000000000000000000000010003', '0x954ba8223a6bfec1cc3867139243a02ba0bc66e4'],
+    wrappers: ['0x3439153eb7af838ad19d56e1571fbd09333c2809', '0xaa4de41dba0ca5dcbb288b7cc6b708f3aac759e7'],
+    // Ethereum side of the ZK Stack bridge
+    zk: { chainId: 2741n, l1Nullifier: '0xD7f9f54194C633F36CCD5F3da84ad4a1c38cB2cB' },
+    // Abstract Global Wallet: smart account derived from the signer address
+    agw: { factory: '0x9B947df68D35281C972511B3E7BC875926f26C1A', registry: '0xd5E3efDA6bB5aB545cc2358796E96D9033496Dda' },
+    example: null,
+  },
+};
+export const CHAIN_KEYS = Object.keys(CHAINS);

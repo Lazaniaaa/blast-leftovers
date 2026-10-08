@@ -4,13 +4,13 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <title>Blast Leftovers</title>
-<meta name="description" content="Paste an address and find everything still sitting on Blast: lending, LP, staking, vaults and unfinished bridge withdrawals. No wallet connection.">
+<meta name="description" content="Paste an address and find everything still sitting on Blast or Abstract: lending, LP, staking, vaults and unfinished bridge withdrawals. No wallet connection.">
 <meta property="og:title" content="Blast Leftovers">
-<meta property="og:description" content="Blast is shutting down. Paste an address and see what you still have there: lending, LP, staking, vaults, unfinished bridge withdrawals. No wallet connection.">
+<meta property="og:description" content="Blast and Abstract are shutting down. Paste an address and see what you still have there: lending, LP, staking, vaults, unfinished bridge withdrawals. No wallet connection.">
 <meta property="og:type" content="website">
 <meta name="twitter:card" content="summary">
 <meta name="twitter:title" content="Blast Leftovers">
-<meta name="twitter:description" content="Find what you still have on Blast before Oct 26. Read-only, no wallet connection.">
+<meta name="twitter:description" content="Find what you still have on Blast (closes Oct 26) and Abstract (closes Dec 15). Read-only, no wallet connection.">
 <meta name="theme-color" content="#d9481f">
 <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Ccircle cx='16' cy='16' r='13' fill='none' stroke='%2315171a' stroke-width='4'/%3E%3Ccircle cx='16' cy='16' r='7' fill='%23d9481f'/%3E%3C/svg%3E">
 <link rel="preconnect" href="https://fonts.googleapis.com">
@@ -69,6 +69,11 @@ a:focus-visible, button:focus-visible, input:focus-visible, summary:focus-visibl
 .lotg { font: 500 13px/1.4 var(--font-mono); color: var(--muted); margin: 0; }
 .lotg a { color: var(--ink); text-decoration-color: var(--accent); text-decoration-thickness: 1.5px; }
 .lotg .heart { color: var(--accent); }
+.chainsel { align-self: flex-start; }
+.chain-block { display: grid; gap: 12px; padding-top: 18px; border-top: 2px solid var(--ink); }
+.chain-head { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px; }
+.chain-head h2 { font: 800 26px/1.1 var(--font-display); letter-spacing: -0.02em; margin: 0; text-wrap: balance; }
+.small-addr { font-size: 12.5px; color: var(--muted); }
 .beta { font: 600 11px/1 var(--font-mono); text-transform: uppercase; letter-spacing: .08em; padding: 4px 7px; border-radius: 999px; border: 1px solid var(--accent); color: var(--accent); }
 .limits { display: grid; gap: 8px; }
 .limits h3 { font: 700 16px/1.2 var(--font-display); margin: 0; }
@@ -241,6 +246,11 @@ try { var t = localStorage.getItem('bl-theme'); if (t === 'light' || t === 'dark
       <input id="addr" name="addr" spellcheck="false" placeholder="0x…" inputmode="text">
       <button class="btn accent" id="scanBtn" type="submit" data-i18n="scan"></button>
     </form>
+    <div class="lang chainsel" role="group" aria-label="Chains">
+      <button type="button" id="chain-all" data-chain-set="all" aria-pressed="true" data-i18n-chain-all></button>
+      <button type="button" id="chain-blast" data-chain-set="blast" aria-pressed="false">Blast</button>
+      <button type="button" id="chain-abstract" data-chain-set="abstract" aria-pressed="false">Abstract</button>
+    </div>
     <div class="hint">
       <span data-i18n-html="hintNoConnect"></span>
       <span><button type="button" class="linkbtn" id="example" data-i18n="example"></button></span>
