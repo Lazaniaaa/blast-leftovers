@@ -147,10 +147,21 @@ export const LABELS_ABSTRACT = {
   '0x4b48f3d1ddc9e5793d4817517255e6bef6d72a7c': 'Amigo · Router',
   '0x8eeae4dd40ebee7bb6471c47d4d867539cf53ccf': 'ZeroLend · Data provider',
 };
+// Bridges and aggregators deployed at the same address on every chain. Their code is often unverified on
+// newer explorers, so name them here: a transfer to them is a bridge-out, not a deposit left behind.
+export const LABELS_SHARED = {
+  '0x4cd00e387622c35bddb9b4c962c136462338bc31': 'Relay · Depository (bridge)',
+  '0xa5f565650890fba1824ee0f21ebbbf660a179934': 'Relay · Receiver (bridge)',
+  '0xf70da97812cb96acdf810712aa562db8dfa3dbef': 'Relay · Solver (bridge)',
+  '0x1231deb6f5749ef6ce6943a275a1d3e7486f4eae': 'LI.FI · Diamond (bridge aggregator)',
+  '0x3a23f943181408eac424116af7b7790c94cb97a5': 'Socket · Gateway (bridge)',
+};
 const BY_CHAIN = { blast: LABELS, abstract: LABELS_ABSTRACT };
 
 export function labelFor(addr, chainKey = 'blast') {
-  return addr ? (BY_CHAIN[chainKey] || {})[addr.toLowerCase()] : undefined;
+  if (!addr) return undefined;
+  const a = addr.toLowerCase();
+  return (BY_CHAIN[chainKey] || {})[a] || LABELS_SHARED[a];
 }
 export function label(addr) {
   return labelFor(addr, 'blast');
