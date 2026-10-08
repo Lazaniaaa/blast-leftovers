@@ -50,6 +50,23 @@ export const CHAINS = {
       // delegate.xyz "linked wallets": ExclusiveDelegateResolver + AGW link rights (from the AGW SDK)
       resolver: '0x0000000078CC4Cc1C14E27c0fa35ED6E5E58825D', linkRights: '0xc10dcfe266c1f71ef476efbd3223555750dc271e4115626b',
     },
+    // contract-internal positions (addresses from docs.myriad.markets and Morpho's address registry)
+    myriad: { market: '0x3e0F5F8F5Fb043aBFA475C0308417Bf72c463289', points: '0x0b07cf011b6e2b7e0803b892d97f751659940f23' },
+    morpho: '0xc85CE8ffdA27b646D269516B8d0Fa6ec2E958B55',
+    // Stargate ETH pool LP (S*ETH) is redeemable 1:1 for ETH
+    priceAlias: { '0x868bdf0b7429704db1a50af77fc02c0bb9a4c754': 'eth' },
+    // apps that hold balances in their own ledger or off-chain; if the wallet touched them, point the user there
+    apps: [
+      { key: 'gigaverse', name: 'Gigaverse', contracts: ['0x50a5eb2b3b289d4cfda0e307609b655175a275b1', '0x59eec556cef447e13edf4bfd3d4433d8dad8a7a5'] },
+      { key: 'och', name: 'Onchain Heroes', contracts: ['0x06d7ee1d50828ca96e11890a1601f6fe61f1e584'] },
+      { key: 'shiny', name: 'Shiny', contracts: ['0x911dbdd9841b53ee5a08170109daf7ad82684108'] },
+      { key: 'gacha', name: 'Gacha', contracts: ['0x268031de8363401d61b6a256bea009bb57277619', '0x3272596f776470d2d7c3f7dff3dc50888b7d8967'] },
+      { key: 'orderly', name: 'Orderly', contracts: ['0xe80f2396a266e898fbbd251b89cfe65b3e41fd18'] },
+      { key: 'logx', name: 'LogX', contracts: ['0x816b55ff6e204d5825cf2792955daf449e819494'] },
+      { key: 'witty', name: 'Witty', contracts: ['0x0b4429576e5ed44a1b8f676c8217eb45707afa3d'] },
+      { key: 'amigo', name: 'Amigo', contracts: ['0x4b48f3d1ddc9e5793d4817517255e6bef6d72a7c'] },
+      { key: 'deathfun', name: 'death.fun', contracts: ['0x27edd16ee56958fddcba08947f12c43ddec2b20c'] },
+    ],
     example: null,
   },
 };

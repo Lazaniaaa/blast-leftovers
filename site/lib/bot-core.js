@@ -2,7 +2,7 @@
 // and by the Vercel webhook (api/telegram.js). Read-only: it never asks for keys or signatures.
 import { scan, abstractWallets } from '../engine.js';
 import { CHAINS } from '../chains.js';
-import { resolveProtocol } from '../protocols.js';
+import { resolveProtocol, PROTOCOLS } from '../protocols.js';
 import { loadTally, DONATE_ADDRESS, COLLECTION_URL } from '../donate.js';
 
 export const SITE = 'https://blast-leftovers.vercel.app';
@@ -58,6 +58,13 @@ const T = {
     sBridgeNoteAbs: '"Ready to claim" means the batch is on Ethereum but nobody claimed the funds yet: claim them on the official migration page. "Waiting" means the batch is not on Ethereum yet (about 3 hours).',
     sBridge: '🌉 Unfinished bridge withdrawals', sBridgeNote: 'Started on Blast, never finalized on Ethereum. Finish them on the official bridge or the L1 portal contract.',
     sLend: '🏦 Lending, vaults, collateral', sLp: '💧 Liquidity', sStake: '🔒 Staked, locked, deposited', sWallet: '👛 Tokens in the wallet', sSales: '🎟 Token sales',
+    pst: { claim: 'won, not claimed', open: 'open position', voided: 'market voided, refund' }, markets: (n) => `${n} market${n === 1 ? '' : 's'}`, openApp: 'open app',
+    sApps: '🎮 Check inside these apps', sAppsNote: 'They keep part of the balance in their own ledger, which no scanner can read. Withdraw in each app before Dec 15.',
+    appNote: {
+      gigaverse: 'items not exported via Trade Port, in-game balances', och: 'staked Heroes, unclaimed HERO, VALOR (off-chain)', shiny: 'vaulted cards, quick-sell proceeds, Pawnshop loans',
+      gacha: 'cards as NFTs, buybacks, prize pools', orderly: 'trading account balance', logx: 'trading account balance', witty: 'game balance, unfinished rounds',
+      amigo: 'keys: sell them back in the app', deathfun: 'unfinished rounds: cash out',
+    },
     supplied: 'supplied', borrowed: 'borrowed', vault: 'vault', lp: 'LP', lpNft: 'LP NFT', lock: 'lock', stream: 'vesting, withdrawable now', inFarm: 'staked in a farm',
     conf: { high: 'confirmed', medium: 'likely' }, unlocks: 'unlocks', permanent: 'permanent',
     st: { initiated: 'not proven', proven: 'proven, not finalized', waiting: 'waiting for Ethereum', claimable: 'ready to claim', unknown: 'unknown' },
@@ -94,6 +101,13 @@ const T = {
     sBridgeNoteAbs: '«Можна заклеймити» означає, що батч уже в Ethereum, але кошти ніхто не забрав: заклейми їх на офіційній сторінці міграції. «Чекає Ethereum» означає, що батч ще не в Ethereum (близько 3 годин).',
     sBridge: '🌉 Незавершені виводи через міст', sBridgeNote: 'Почато на Blast, але не завершено в Ethereum. Заверши через офіційний міст або L1-контракт порталу.',
     sLend: '🏦 Лендінги, волти, застава', sLp: '💧 Ліквідність', sStake: '🔒 Стейкінг, локи, депозити', sWallet: '👛 Токени на гаманці', sSales: '🎟 Сейли токенів',
+    pst: { claim: 'виграш не забрано', open: 'відкрита позиція', voided: 'ринок скасовано, повернення' }, markets: (n) => `ринків: ${n}`, openApp: 'відкрити',
+    sApps: '🎮 Перевір усередині цих застосунків', sAppsNote: 'Частину балансу вони тримають у власному обліку, і жоден сканер його не бачить. Виведи кошти в кожному застосунку до 15 грудня.',
+    appNote: {
+      gigaverse: 'предмети, не експортовані через Trade Port, баланси в грі', och: 'застейкані герої, незабраний HERO, VALOR (поза блокчейном)', shiny: 'картки у сховищі, гроші за quick-sell, позики в Pawnshop',
+      gacha: 'картки у вигляді NFT, buyback, призові пули', orderly: 'баланс торгового акаунта', logx: 'баланс торгового акаунта', witty: 'баланс у грі, незавершені раунди',
+      amigo: 'keys: продай їх назад у застосунку', deathfun: 'незавершені раунди: забери гроші',
+    },
     supplied: 'депозит', borrowed: 'борг', vault: 'волт', lp: 'LP', lpNft: 'LP NFT', lock: 'лок', stream: 'вестинг, можна вивести зараз', inFarm: 'застейкано у фармі',
     conf: { high: 'підтверджено', medium: 'ймовірно' }, unlocks: 'розлок', permanent: 'безстроковий',
     st: { initiated: 'не доведено (prove)', proven: 'доведено, не фіналізовано', waiting: 'чекає Ethereum', claimable: 'можна заклеймити', unknown: 'невідомо' },
@@ -197,6 +211,7 @@ export function report(r, lang) {
   }
   for (const v of r.vaults) {
     const p = proto(v, v.pool || v.token, t);
+    if (v.type === 'Prediction') { lend.push(`• <b>${esc(p.name || 'Myriad')}</b> · ${t.pst[v.status] || v.status} ${amt(v.amount)} ${esc(v.underlyingSymbol || '')} (${usd(v.usd) || t.noPrice}) · ${t.markets(v.markets)}${p.extra}`); continue; }
     lend.push(`• <b>${esc(p.name || v.name || '')}</b> · ${v.type === 'Vault' ? t.vault : t.supplied} ${amt(v.amount)} ${esc(v.underlyingSymbol || '')} (${usd(v.usd) || t.noPrice})${p.extra}`);
   }
   for (const d of r.debts) {
@@ -231,6 +246,11 @@ export function report(r, lang) {
   section(t.sStake, st);
 
   section(t.sWallet, r.wallet.map((w) => `• ${esc(w.symbol)}: ${amt(w.amount)} (${usd(w.usd)})`), 6);
+
+  if ((r.apps || []).length) {
+    section(t.sApps, r.apps.map((a) => { const p = PROTOCOLS[a.key]; return `• <b>${esc(a.protocol)}</b>: ${t.appNote[a.key] || ''}${p?.url ? ' ' + link(p.url, t.openApp) : ''}`; }));
+    L.push(`<i>${t.sAppsNote}</i>`);
+  }
 
   const sales = r.sales || [];
   if (sales.length) {
@@ -327,10 +347,10 @@ async function handleScan(chatId, address, lang) {
     const isEmpty = (r) => !r.wallet.some((w) => (w.usd || 0) >= 0.01) && !r.vaults.length && !r.lp.length && !r.nftPositions.length && !r.locks.length
       && !r.deposits.some((d) => d.confidence !== 'low') && !r.bridge.some((b) => b.status !== 'finalized') && !r.debts.length;
     // the signer of an AGW is reported only when it holds something itself
-    const shown = ok.filter((r) => !(r.hasAgw && isEmpty(r) && !(r.suggest || []).length));
+    const shown = ok.filter((r) => !(r.hasAgw && isEmpty(r) && !(r.suggest || []).length && !(r.apps || []).length));
     const messages = [];
     for (const r of shown) {
-      if (isEmpty(r) && !(r.suggest || []).length) messages.push(`🔎 <b>${esc(CHAINS[r.chain].name)}</b>: ${t.nothing(CHAINS[r.chain].name)}`);
+      if (isEmpty(r) && !(r.suggest || []).length && !(r.apps || []).length) messages.push(`🔎 <b>${esc(CHAINS[r.chain].name)}</b>: ${t.nothing(CHAINS[r.chain].name)}`);
       else messages.push(...chunks(report(r, lang)));
     }
     for (const e of results.filter((r) => r.error)) messages.push(t.failed(`${CHAINS[e.chain].name}: ${e.error.shortMessage || e.error.message}`));

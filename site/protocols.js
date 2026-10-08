@@ -58,6 +58,16 @@ export const PROTOCOLS = {
   mondrian: { name: 'Mondrian Swap', slug: 'mondrian-swap', url: null, dead: true, x: 'MondrianSwap', kw: ['mondrian'] },
   morpho: { name: 'Morpho', slug: 'morpho-blue', url: 'https://app.morpho.org', x: 'Morpho', kw: ['morpho'] },
   logx: { name: 'LogX', slug: 'logx-v2', url: 'https://logx.network/', x: 'LogX_trade', kw: ['logx'] },
+  stargate: { name: 'Stargate', slug: 'stargate-v2', url: 'https://stargate.finance/', x: 'StargateFinance', kw: ['stargate ·', 's*eth'] },
+  orderly: { name: 'Orderly', slug: 'orderly-bridge', url: 'https://orderly.network', x: 'OrderlyNetwork', kw: ['orderly'] },
+  sweepnflip: { name: 'Sweep n Flip', slug: 'sweep-n-flip', url: 'https://sweepnflip.io/', x: 'SweepnFlip', kw: ['sweep n flip'] },
+  gacha: { name: 'Gacha', slug: 'gacha-markets', url: 'https://gacha.game/', x: 'gacha_game_', kw: ['gacha ·'] },
+  shiny: { name: 'Shiny', slug: 'shiny', url: 'https://shiny.com/', x: 'ShinyLabs', kw: ['shiny ·'] },
+  vertex: { name: 'Vertex', slug: 'vertex-perps', url: null, dead: true, x: 'vertex_protocol', kw: ['vertex ·'] },
+  speedtrading: { name: 'SpeedTrading', slug: 'speedtrading', url: null, dead: true, x: 'pandoradotfun', kw: ['speedtrading'] },
+  // not on DefiLlama: sites from the projects' own docs
+  gigaverse: { name: 'Gigaverse', slug: null, url: 'https://gigaverse.io/', x: null, kw: ['gigaverse'] },
+  och: { name: 'Onchain Heroes', slug: null, url: 'https://play.onchainheroes.xyz/', x: null, kw: ['onchain heroes'] },
 };
 
 // Texts are tried in priority order (explicit protocol label first, token name last),

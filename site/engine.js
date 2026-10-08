@@ -20,6 +20,12 @@ const PORTAL = '0x0Ec68c5B10F21EFFb74f2A5C61DFe6b08C0Db6Cb';
 const MSG_PASSED = '0x02a52367d10742d8032712c1bb8e0144ff1ec5ffda1ed7d70bb05a2744955054';
 // ZK Stack: Withdrawal(address,address,uint256) emitted by the ETH base token contract 0x…800a
 const ZK_WITHDRAWAL = '0x2717ead6b9200dd235aad468c9809ea400fe33ac69b5bfaa6d3e90fc922b6398';
+// MarketActionTx(address indexed user, uint8 indexed action, uint256 indexed marketId, …) on Myriad
+const MYRIAD_ACTION = '0x9dcabe311735ed0d65f0c22c5425d1f17331f94c9d0767f59e58473cf95ada61';
+// Morpho Blue Supply / SupplyCollateral: onBehalf is the third indexed topic
+const MORPHO_SUPPLY = keccak256(new TextEncoder().encode('Supply(bytes32,address,address,uint256,uint256)'));
+const MORPHO_COLLATERAL = keccak256(new TextEncoder().encode('SupplyCollateral(bytes32,address,address,uint256)'));
+const topicAddr = (a) => '0x' + a.slice(2).toLowerCase().padStart(64, '0');
 const ZERO = '0x0000000000000000000000000000000000000000';
 export const ETH = '0xeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee';
 
@@ -55,6 +61,20 @@ const A = {
     'function withdrawableAmountOf(uint256) view returns (uint128)',
     'function getAsset(uint256) view returns (address)',
     'function getUnderlyingToken(uint256) view returns (address)',
+    'function getToken(uint256) view returns (address)',
+  ]),
+  // Myriad prediction markets (Polkamarkets V3 interface)
+  myriad: parseAbi([
+    'function getUserMarketShares(uint256 marketId, address user) view returns (uint256 liquidity, uint256[] outcomes)',
+    'function getUserClaimStatus(uint256 marketId, address user) view returns (bool winningsToClaim, bool winningsClaimed, bool liquidityToClaim, bool liquidityClaimed, uint256 claimableFees)',
+    'function getMarketData(uint256 marketId) view returns (uint8 state, uint256 closesAt, uint256 liquidity, uint256 balance, uint256 sharesAvailable, int256 resolvedOutcomeId)',
+    'function getMarketAltData(uint256 marketId) view returns (uint256, bytes32, uint256, address token, uint256, address, address, uint256)',
+    'function getMarketPrices(uint256 marketId) view returns (uint256 liquidityPrice, uint256[] outcomePrices)',
+  ]),
+  morpho: parseAbi([
+    'function position(bytes32 id, address user) view returns (uint256 supplyShares, uint128 borrowShares, uint128 collateral)',
+    'function market(bytes32 id) view returns (uint128 totalSupplyAssets, uint128 totalSupplyShares, uint128 totalBorrowAssets, uint128 totalBorrowShares, uint128 lastUpdate, uint128 fee)',
+    'function idToMarketParams(bytes32 id) view returns (address loanToken, address collateralToken, address oracle, address irm, uint256 lltv)',
   ]),
   e1155: parseAbi(['function balanceOf(address, uint256) view returns (uint256)']),
   aavePool: parseAbi(['function getUserAccountData(address) view returns (uint256,uint256,uint256,uint256,uint256,uint256)']),
@@ -191,6 +211,8 @@ async function rs(params, tries = 4) {
 
 // Paginate an account list endpoint by block range.
 const truncated = new Set();
+// contracts an adapter already reads exactly: the deposit heuristic must not count them again
+const covered = new Set();
 async function rsAll(action, address, onProgress) {
   const PAGE = chain.pageMax, MAX = chain.historyMax;
   // newest first: for very active wallets the recent history (bridge withdrawals, last deposits) matters most
@@ -247,10 +269,11 @@ async function scan(input, log = () => {}) {
   const result = {
     address: user, chain: chain.key, scannedAt: new Date().toISOString(),
     wallet: [], lending: [], debts: [], lp: [], vaults: [], nftPositions: [], locks: [],
-    deposits: [], sales: [], bridge: [], nfts: [], spam: [], unknown: [], notes: [],
+    deposits: [], sales: [], bridge: [], nfts: [], spam: [], unknown: [], apps: [], notes: [],
   };
 
   truncated.clear();
+  covered.clear();
   log('Loading transaction history…');
   const [tokentx, nfttx, txlist, internal, ethBal] = await Promise.all([
     rsAll('tokentx', user, (n) => log(`Token transfers loaded: ${n}`)),
@@ -387,6 +410,13 @@ async function scan(input, log = () => {}) {
     // ----- internal balances: Ambient surplus, SynFutures margin -----
     try { await internalBalances(user, u, tokentx, meta, priceList, pending); } catch (e) { result.notes.push('Ambient / SynFutures check failed: ' + e.message); }
   }
+  // ----- positions that live inside one contract, found from its event logs -----
+  if (chain.myriad) {
+    try { await myriad(user, u, pending, meta, priceList); } catch (e) { result.notes.push('Myriad check failed: ' + e.message); }
+  }
+  if (chain.morpho) {
+    try { await morphoBlue(user, u, pending, meta, priceList); } catch (e) { result.notes.push('Morpho check failed: ' + e.message); }
+  }
 
   // ----- NFTs: held + deposited in contracts -----
   log('Checking NFTs and LP positions…');
@@ -406,6 +436,15 @@ async function scan(input, log = () => {}) {
   const allNft = [...heldNfts, ...depositedNfts.filter((d) => codes[d.owner])];
   await decodeNfts(allNft, u, meta, result, priceList);
   try { await erc1155(u, tx1155, txlist, result); } catch { /* optional */ }
+
+  // ----- apps that keep balances in their own ledger: we can only point there -----
+  if (chain.apps) {
+    const touched = new Set();
+    for (const t of txlist) { touched.add(lc(t.to)); touched.add(lc(t.from)); }
+    for (const t of [...tokentx, ...internal]) { touched.add(lc(t.from)); touched.add(lc(t.to)); }
+    for (const t of [...nfttx, ...tx1155]) touched.add(lc(t.contractAddress));
+    result.apps = chain.apps.filter((a) => a.contracts.some((c) => touched.has(c))).map((a) => ({ key: a.key, protocol: a.name }));
+  }
 
   // ----- "went in and never came back" heuristic -----
   log('Looking for deposits without receipt tokens (staking, farms)…');
@@ -442,6 +481,11 @@ async function scan(input, log = () => {}) {
   const px = await prices([...priceList]);
   if (px[BLUR_POOL] == null && px[ETH] != null) px[BLUR_POOL] = px[ETH]; // Blur Pool is ETH 1:1
   if (meta[BLUR_POOL] && !meta[BLUR_POOL].symbol) meta[BLUR_POOL].symbol = 'Blur Pool ETH';
+  // receipt tokens redeemable 1:1 for another asset (Stargate S*ETH and similar)
+  for (const [a, b] of Object.entries(chain.priceAlias || {})) {
+    const to = b === 'eth' ? ETH : b;
+    if (px[a] == null && px[to] != null) px[a] = px[to];
+  }
   await priceLps(depFiltered.map((d) => d.token).filter((t) => t !== ETH && px[t] == null), px, meta);
   result.prices = px;
   const usd = (addr, raw) => {
@@ -462,7 +506,7 @@ async function scan(input, log = () => {}) {
       if (v.usd == null) result.unknown.push(row); else result.wallet.push(row);
     } else if (x.kind === 'lend' || x.kind === 'debt') {
       const v = usd(x.underlying, x.undAmountRaw);
-      if (v.amount === 0) continue;
+      if (v.amount === 0 || (v.usd != null && v.usd < 0.005)) continue; // dust
       (x.kind === 'lend' ? result.vaults : result.debts).push({
         type: x.kind === 'lend' ? 'Supplied / lending' : 'Debt', token: x.token, receipt: x.symbol, name: x.name,
         protocol: x.protocol || x.protocolGuess || '', underlying: x.underlying, underlyingSymbol: v.symbol, account: x.account, pool: x.pool, comptroller: x.comptroller,
@@ -470,7 +514,8 @@ async function scan(input, log = () => {}) {
       });
     } else if (x.kind === 'vault') {
       const v = usd(x.underlying, x.undAmountRaw);
-      result.vaults.push({ type: 'Vault', token: x.token, receipt: x.symbol, name: x.name, protocol: x.protocol || protoFromName(x.name) || '', underlying: x.underlying, underlyingSymbol: v.symbol, amount: v.amount, usd: v.usd ?? (px[x.token] != null ? x.amount * px[x.token] : null) });
+      if (v.amount === 0 || (v.usd != null && v.usd < 0.005)) continue; // dust
+      result.vaults.push({ type: x.type || 'Vault', status: x.status, markets: x.markets, token: x.token, receipt: x.symbol, name: x.name, protocol: x.protocol || protoFromName(x.name) || '', underlying: x.underlying, underlyingSymbol: v.symbol, amount: v.amount, usd: v.usd ?? (px[x.token] != null ? x.amount * px[x.token] : null) });
     } else if (x.kind === 'lp') {
       const a = usd(x.token0, x.amt0Raw), b = usd(x.token1, x.amt1Raw);
       const known = [a.usd, b.usd].filter((v) => v != null);
@@ -559,6 +604,82 @@ async function juice(user, pending, meta, priceList) {
   found.forEach((f) => priceList.add(f.underlying));
   // Juice receipt tokens are now represented by the adapter rows
   for (let i = pending.length - 1; i >= 0; i--) if (pending[i].kind === 'wallet' && /^Juice /.test(pending[i].name || '')) pending.splice(i, 1);
+  pending.push(...found);
+}
+
+// all logs of one contract where a topic is the user (Abstract RPC allows the full block range)
+const userLogs = (address, topics) => client.request({ method: 'eth_getLogs', params: [{ address, fromBlock: '0x0', toBlock: 'latest', topics }] });
+
+// Myriad: outcome shares and liquidity are balances inside the market contract, not tokens
+async function myriad(user, u, pending, meta, priceList) {
+  const M = chain.myriad;
+  const logs = await userLogs(M.market, [MYRIAD_ACTION, topicAddr(u)]);
+  if (!logs.length) return;
+  covered.add(lc(M.market));
+  const ids = [...new Set(logs.map((l) => BigInt(l.topics[3])))];
+  const FN = ['getUserMarketShares', 'getUserClaimStatus', 'getMarketData', 'getMarketAltData', 'getMarketPrices'];
+  const r = await multi(ids.flatMap((id) => FN.map((fn) => ({ address: M.market, abi: A.myriad, functionName: fn, args: fn.startsWith('getUser') ? [id, user] : [id] }))));
+  const E18 = 10n ** 18n;
+  const agg = {};
+  ids.forEach((id, i) => {
+    const [sh, cl, md, alt, pxs] = r.slice(i * FN.length, (i + 1) * FN.length);
+    if (!sh || !md || !alt) return;
+    const token = lc(alt[3]);
+    if (token === lc(M.points)) return; // PTS markets are played for points, not money
+    const [liq, outs] = sh;
+    const [state, , , , , resolved] = md;
+    const [liqPrice, outPrices] = pxs || [0n, []];
+    const [winToClaim, winClaimed, liqToClaim, liqClaimed, fees] = cl || [false, false, false, false, 0n];
+    const liqValue = liqToClaim && !liqClaimed ? (liq * liqPrice) / E18 : 0n;
+    let raw = fees || 0n, status;
+    if (state === 2 && resolved >= 0n) {
+      // resolved: winning shares pay 1:1, losing shares are worth nothing
+      status = 'claim';
+      if (winToClaim && !winClaimed) raw += outs[Number(resolved)] || 0n;
+      raw += liqValue;
+    } else {
+      // open, closed or voided (-1): shares are worth their current / frozen price
+      status = state === 2 ? 'voided' : 'open';
+      raw += outs.reduce((s, x, k) => s + (x * (outPrices[k] || 0n)) / E18, 0n) + (state === 2 ? liqValue : (liq * liqPrice) / E18);
+    }
+    if (raw <= 0n) return;
+    const k = status + '|' + token;
+    agg[k] ||= { status, token, raw: 0n, n: 0 };
+    agg[k].raw += raw; agg[k].n++;
+  });
+  const rows = Object.values(agg);
+  if (!rows.length) return;
+  await fillMeta(rows.map((x) => x.token).filter((a) => !meta[a]), meta);
+  for (const x of rows) {
+    priceList.add(x.token);
+    pending.push({ kind: 'vault', type: 'Prediction', status: x.status, markets: x.n, token: lc(M.market), symbol: meta[x.token]?.symbol, name: 'Myriad', protocol: 'Myriad Markets', underlying: x.token, undAmountRaw: x.raw });
+  }
+}
+
+// Morpho Blue: direct supply, collateral and debt per market (vault shares are ERC-4626 tokens and decode elsewhere)
+async function morphoBlue(user, u, pending, meta, priceList) {
+  const M = chain.morpho;
+  const logs = await userLogs(M, [[MORPHO_SUPPLY, MORPHO_COLLATERAL], null, null, topicAddr(u)]);
+  if (!logs.length) return;
+  covered.add(lc(M));
+  const ids = [...new Set(logs.map((l) => l.topics[1]))];
+  const r = await multi(ids.flatMap((id) => ['position', 'market', 'idToMarketParams'].map((fn) => ({ address: M, abi: A.morpho, functionName: fn, args: fn === 'position' ? [id, user] : [id] }))));
+  const found = [];
+  ids.forEach((id, i) => {
+    const [p, m, mp] = r.slice(i * 3, i * 3 + 3);
+    if (!p || !m || !mp) return;
+    const [supplyShares, borrowShares, collateral] = p;
+    const [tSA, tSS, tBA, tBS] = m;
+    const loan = lc(mp[0]), coll = lc(mp[1]);
+    const name = 'Morpho · market ' + id.slice(0, 10) + '…';
+    // Morpho's SharesMathLib: virtual shares 1e6, virtual assets 1
+    if (supplyShares > 0n) found.push({ kind: 'lend', token: lc(M), symbol: 'supplied', name, protocol: 'Morpho', underlying: loan, undAmountRaw: (supplyShares * (tSA + 1n)) / (tSS + 10n ** 6n) });
+    if (collateral > 0n) found.push({ kind: 'lend', token: lc(M), symbol: 'collateral', name, protocol: 'Morpho', underlying: coll, undAmountRaw: collateral });
+    if (borrowShares > 0n) found.push({ kind: 'debt', token: lc(M), symbol: 'debt', name, protocol: 'Morpho', underlying: loan, undAmountRaw: (borrowShares * (tBA + 1n) + tBS + 10n ** 6n - 1n) / (tBS + 10n ** 6n) });
+  });
+  if (!found.length) return;
+  await fillMeta(found.map((f) => f.underlying).filter((a) => !meta[a]), meta);
+  found.forEach((f) => priceList.add(f.underlying));
   pending.push(...found);
 }
 
@@ -677,6 +798,7 @@ async function decodeNfts(list, u, meta, result, priceList) {
     { address: x.t.contractAddress, abi: A.stream, functionName: 'withdrawableAmountOf', args: [BigInt(x.t.tokenID)] },
     { address: x.t.contractAddress, abi: A.stream, functionName: 'getAsset', args: [BigInt(x.t.tokenID)] },
     { address: x.t.contractAddress, abi: A.stream, functionName: 'getUnderlyingToken', args: [BigInt(x.t.tokenID)] },
+    { address: x.t.contractAddress, abi: A.stream, functionName: 'getToken', args: [BigInt(x.t.tokenID)] }, // Sablier Flow
   ]));
   const cinfo = await multi(contracts.flatMap((c) => [
     { address: c, abi: A.nft, functionName: 'name' },
@@ -719,7 +841,7 @@ async function decodeNfts(list, u, meta, result, priceList) {
       }
     }
     // vesting streams (Sablier-style): withdrawable right now
-    const sw = streamData[i * 3], sa = streamData[i * 3 + 1] || streamData[i * 3 + 2];
+    const sw = streamData[i * 4], sa = streamData[i * 4 + 1] || streamData[i * 4 + 2] || streamData[i * 4 + 3];
     if (sa && sw != null) {
       if (sw > 0n) { priceList.add(lc(sa)); result.locks.push({ ...base, type: 'Vesting stream', stream: true, lockToken: lc(sa), raw: sw, unlock: 'now', unlocked: true }); }
       return;
@@ -935,6 +1057,8 @@ async function verifyDeposits(deps, u, codes, result, usd, meta) {
       || nm.sourceName || (firstReceived ? firstReceived.name || firstReceived.symbol : null) || null;
     // Juice accounts are already covered by the Juice adapter
     if (/^Juice/.test(project || '') || result.vaults.some((x) => x.account && d.cluster.includes(x.account))) return;
+    // Myriad, Morpho and other adapters read these contracts exactly
+    if (d.cluster.some((c) => covered.has(c))) return;
     // bridges / aggregators / routers: funds left Blast or were swapped, nothing to recover here
     if (!ownedBy[main] && !hits.length && /multicall|disperse|socket|lifi|relay|bridge|orbiter|across|stargate|spoke|depository|router|gateway|aggregat|1inch|odos|kyber|paraswap|rango|rhino|owlto|layerswap|meson|symbiosis|squid|wormhole|okx|openocean|messenger|dvf|deposit ?contract/i.test(project || '')) return;
     // somebody else's wallet (Safe, Abstract Global Wallet, other smart accounts) = a plain payment to a person

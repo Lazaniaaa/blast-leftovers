@@ -1,6 +1,6 @@
 import { scan, ETH, abstractWallets } from './engine.js';
 import { CHAINS } from './chains.js';
-import { resolveProtocol } from './protocols.js';
+import { resolveProtocol, PROTOCOLS } from './protocols.js';
 import { DONATE_ADDRESS, GOAL_USD, loadTally } from './donate.js';
 
 const EXAMPLE = CHAINS.blast.example;
@@ -29,6 +29,20 @@ const T = {
     gWalletNoteAbs: 'Plain balances. Swap or bridge them out before Dec 15. Tokens that exist only on Abstract can be sold only while the chain runs.',
     gNftNoteAbs: 'NFTs on Abstract cannot be bridged in general. Whether a collection moves depends on its project; check their announcements.',
     gUnknownNoteAbs: 'Tokens without a market price. If they exist only on Abstract, sell them before Dec 15 or they are lost.',
+    prediction: 'Prediction market', markets: (n) => `${n} market${n === 1 ? '' : 's'}`,
+    pst: { claim: 'won, not claimed', open: 'open position', voided: 'market voided, refund' },
+    gApps: 'Check inside these apps', gAppsNote: 'You used these apps. They keep part of the balance in their own ledger (game items, cards, trading accounts, points), which no scanner can read. Open each app and withdraw before Dec 15.',
+    appNote: {
+      gigaverse: 'Game items not exported through Trade Port, and in-game balances.',
+      och: 'Heroes staked in game contracts, unclaimed HERO, VALOR from Maze of Gains (off-chain).',
+      shiny: 'Vaulted cards, quick-sell proceeds, Pawnshop loans.',
+      gacha: 'Cards held as NFTs (physical twins), buybacks, prize pools.',
+      orderly: 'Trading account balance (Orderly-based exchanges). Withdraw it in the app.',
+      logx: 'Trading account balance. Withdraw it in the app.',
+      witty: 'Game balance and unfinished rounds.',
+      amigo: 'Keys inside Amigo: sell them back in the app.',
+      deathfun: 'Unfinished rounds: cash out in the app.',
+    },
     insolvent: 'insolvent here',
     invalid: 'That is not a valid EVM address. It should start with 0x and have 40 hex characters.',
     failed: 'Scan failed: ',
@@ -68,7 +82,7 @@ const T = {
     stream: 'Vesting stream', streamNow: 'withdrawable now',
     themeAuto: 'Auto', themeLight: 'Light', themeDark: 'Dark',
     limT: 'Known limitations (beta)',
-    lim1: 'Open positions in SynFutures, Particle LAMM, INIT (position NFTs) and Mangrove are not decoded yet. Margin in SynFutures is shown. On Abstract, balances inside games and apps are not read.',
+    lim1: 'Open positions in SynFutures, Particle LAMM, INIT (position NFTs) and Mangrove are not decoded yet. Margin in SynFutures is shown. On Abstract, Myriad markets and Morpho are read, but balances kept inside games and apps (VALOR, DYLI earnings, unexported Gigaverse items, Shiny or Gacha cards, Orderly accounts, game wallets made by an app) are not: the scan lists the apps you used so you can check them.',
     lim2: 'Blast Mobile and AgentFi smart wallets have their own addresses. Paste them separately. Abstract Global Wallets are found automatically.',
     lim3: 'Very active wallets take about a minute, and only the latest 20,000 records of history are checked.',
     lim4: 'The page relies on free public APIs (Routescan, the Abstract explorer, public RPCs, DefiLlama). If a chain’s RPC goes offline early, its scans stop working.',
@@ -111,6 +125,20 @@ const T = {
     gWalletNoteAbs: 'Звичайні баланси. Обміняй або виведи їх до 15 грудня. Токени, що існують лише на Abstract, можна продати тільки поки мережа працює.',
     gNftNoteAbs: 'NFT з Abstract загалом не переносяться мостом. Чи переїде колекція, вирішує її проєкт: дивись їхні анонси.',
     gUnknownNoteAbs: 'Токени без ринкової ціни. Якщо вони є лише на Abstract, продай їх до 15 грудня, інакше вони пропадуть.',
+    prediction: 'Ринок прогнозів', markets: (n) => `ринків: ${n}`,
+    pst: { claim: 'виграш не забрано', open: 'відкрита позиція', voided: 'ринок скасовано, повернення' },
+    gApps: 'Перевір усередині цих застосунків', gAppsNote: 'Ти користувався цими застосунками. Частину балансу вони тримають у власному обліку (ігрові предмети, картки, торгові акаунти, поінти), і жоден сканер його не бачить. Відкрий кожен застосунок і виведи кошти до 15 грудня.',
+    appNote: {
+      gigaverse: 'Ігрові предмети, не експортовані через Trade Port, і баланси в грі.',
+      och: 'Герої, застейкані в ігрових контрактах, незабраний HERO, VALOR з Maze of Gains (поза блокчейном).',
+      shiny: 'Картки у сховищі, гроші за quick-sell, позики в Pawnshop.',
+      gacha: 'Картки у вигляді NFT (фізичні двійники), buyback, призові пули.',
+      orderly: 'Баланс торгового акаунта (біржі на Orderly). Виведи його в застосунку.',
+      logx: 'Баланс торгового акаунта. Виведи його в застосунку.',
+      witty: 'Баланс у грі та незавершені раунди.',
+      amigo: 'Keys в Amigo: продай їх назад у застосунку.',
+      deathfun: 'Незавершені раунди: забери гроші в застосунку.',
+    },
     insolvent: 'тут неплатоспроможний',
     invalid: 'Це не схоже на EVM-адресу. Вона має починатися з 0x і мати 40 hex-символів.',
     failed: 'Помилка сканування: ',
@@ -150,7 +178,7 @@ const T = {
     stream: 'Вестинг-стрім', streamNow: 'можна вивести зараз',
     themeAuto: 'Авто', themeLight: 'Світла', themeDark: 'Темна',
     limT: 'Відомі обмеження (бета)',
-    lim1: 'Відкриті позиції в SynFutures, Particle LAMM, INIT (NFT позицій) і Mangrove поки не розбираються. Маржа в SynFutures показується. На Abstract баланси всередині ігор і застосунків не читаються.',
+    lim1: 'Відкриті позиції в SynFutures, Particle LAMM, INIT (NFT позицій) і Mangrove поки не розбираються. Маржа в SynFutures показується. На Abstract ринки Myriad і Morpho читаються, а баланси всередині ігор і застосунків (VALOR, заробіток у DYLI, неекспортовані предмети Gigaverse, картки Shiny чи Gacha, акаунти Orderly, ігрові гаманці, які створив застосунок) — ні: сканер показує застосунки, якими ти користувався, щоб ти перевірив їх сам.',
     lim2: 'Смарт-гаманці Blast Mobile та AgentFi мають власні адреси, встав їх окремо. Abstract Global Wallet знаходиться автоматично.',
     lim3: 'Дуже активні гаманці скануються близько хвилини, і перевіряються лише останні 20 000 записів історії.',
     lim4: 'Сторінка працює на безкоштовних публічних API (Routescan, експлорер Abstract, публічні RPC, DefiLlama). Якщо RPC мережі вимкнуть раніше, її сканування перестане працювати.',
@@ -237,7 +265,7 @@ const scanAddr = (a, anchor = '') => `${SCAN}/address/${a}${anchor}`;
 const nftUrl = (c, id) => `${SCAN}/nft/${c}/${id}`;
 
 function protoBits(row, contractForWithdraw, { fallbackChip = true } = {}) {
-  const p = resolveProtocol(row.protocol, row.name, row.receipt, row.collection, row.contractLabel, row.heldByLabel);
+  const p = row.protocolKey ? { key: row.protocolKey, ...PROTOCOLS[row.protocolKey] } : resolveProtocol(row.protocol, row.name, row.receipt, row.collection, row.contractLabel, row.heldByLabel);
   const chips = [];
   const links = [];
   if (p) {
@@ -299,7 +327,7 @@ function renderAll(results) {
   // the signer of an Abstract Global Wallet is shown only when it holds something itself
   const agwFound = blocks.some((r) => r.chain === 'abstract' && isAgwKind(r.kind));
   blocks.forEach((r) => { if (r.chain === 'abstract' && r.kind === 'eoa') r.hasAgw = agwFound; });
-  const visible = blocks.filter((r) => !(r.hasAgw && isEmpty(r) && !(r.suggest || []).length));
+  const visible = blocks.filter((r) => !(r.hasAgw && isEmpty(r) && !(r.suggest || []).length && !(r.apps || []).length));
   const input = results[0]?.input || results[0]?.address;
   const total = visible.reduce((s, r) => s + foundOf(r), 0);
   const share = shareAmountAll(results);
@@ -352,7 +380,7 @@ function renderBlock(r, idx, multi) {
   const positions = r.totals.positions + r.totals.possible;
   const likely = r.totals.likely || 0;
   const days = Math.ceil((new Date(CUR.deadline) - Date.now()) / 86400000);
-  const quiet = isEmpty(r) && !r.nfts.length && !r.unknown.length && !(r.sales || []).length && !depsLow.length && !r.bridge.length && !(r.suggest || []).length;
+  const quiet = isEmpty(r) && !r.nfts.length && !r.unknown.length && !(r.sales || []).length && !depsLow.length && !r.bridge.length && !(r.suggest || []).length && !(r.apps || []).length;
   if (quiet) {
     return `<section class="chain-block" id="chain-${idx}"><div class="chain-head"><h2>${esc(blockTitle(r))}</h2>
       <span class="chip ${days <= 7 ? 'crit' : 'warn'}">${t('closes')(dl(CUR), days)}</span></div>
@@ -404,6 +432,11 @@ function renderBlock(r, idx, multi) {
   for (const v of r.vaults) {
     const { chips, links } = protoBits(v, v.pool || v.token);
     links.push(`<a href="${scanAddr(v.account || v.token)}" target="_blank" rel="noopener noreferrer">${t('explorer')}</a>`);
+    if (v.type === 'Prediction') {
+      chips.push(`<span class="chip ${v.status === 'open' ? 'warn' : 'crit'}">${t('pst')[v.status] || v.status}</span>`);
+      lendRows.push(rowHtml({ title: `${t('prediction')} · ${esc(v.underlyingSymbol || '?')}`, chips, sub: t('markets')(v.markets), value: usd(v.usd), amount: `${amt(v.amount)} ${esc(v.underlyingSymbol || '')}`, links }));
+      continue;
+    }
     lendRows.push(rowHtml({ title: `${v.type === 'Vault' ? t('vault') : t('supplied')} · ${esc(v.underlyingSymbol || '?')}`, chips, sub: `${esc(v.name || '')}${v.receipt ? ` · ${esc(v.receipt)}` : ''}`, value: usd(v.usd), amount: `${amt(v.amount)} ${esc(v.underlyingSymbol || '')}`, links }));
   }
   for (const d of r.debts) {
@@ -456,6 +489,15 @@ function renderBlock(r, idx, multi) {
       value: usd(w.usd), amount: `${amt(w.amount)} ${esc(w.symbol)}`,
       links: w.token === ETH ? [] : [`<a href="${SCAN}/token/${w.token}?a=${r.address}" target="_blank" rel="noopener noreferrer">${t('explorer')}</a>`],
     })),
+  }));
+
+  // 5b. apps with their own balances: we cannot read them, only point there
+  out.push(group({
+    id: `apps-${idx}`, title: t('gApps'), note: t('gAppsNote'),
+    rows: (r.apps || []).map((a) => {
+      const { chips, links } = protoBits({ protocolKey: a.key, protocol: a.protocol }, null);
+      return rowHtml({ title: `<span class="proj">${esc(a.protocol)}</span>`, chips: chips.slice(1), sub: t('appNote')[a.key] || '', value: '', links });
+    }),
   }));
 
   // 6. collapsed extras
