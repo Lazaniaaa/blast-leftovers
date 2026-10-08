@@ -907,6 +907,12 @@ async function verifyDeposits(deps, u, codes, result, usd, meta) {
     if (o === u || owners.includes(u)) ownedBy[c] = owners.length ? 'Safe' : 'owner';
   });
   const names = await contractNames(allC);
+  // on Abstract, ask the AGW registry which of these contracts are personal smart wallets
+  const agwSet = new Set();
+  if (chain.agw && allC.length) {
+    const isAgw = await multi(allC.map((c) => ({ address: chain.agw.registry, abi: A.agwRegistry, functionName: 'isAGW', args: [c] })));
+    allC.forEach((c, i) => { if (isAgw[i] === true) agwSet.add(c); });
+  }
   await fillMeta(deps.flatMap((d) => d.received.map((x) => x.token)).filter((a) => a !== ETH && !meta[a]), meta);
   const decOf = (t) => (t === ETH ? 18 : meta[t]?.decimals ?? 18);
 
@@ -930,8 +936,9 @@ async function verifyDeposits(deps, u, codes, result, usd, meta) {
     if (/^Juice/.test(project || '') || result.vaults.some((x) => x.account && d.cluster.includes(x.account))) return;
     // bridges / aggregators / routers: funds left Blast or were swapped, nothing to recover here
     if (!ownedBy[main] && !hits.length && /multicall|disperse|socket|lifi|relay|bridge|orbiter|across|stargate|spoke|depository|router|gateway|aggregat|1inch|odos|kyber|paraswap|rango|rhino|owlto|layerswap|meson|symbiosis|squid|wormhole|okx|openocean|messenger|dvf|deposit ?contract/i.test(project || '')) return;
-    // somebody else's Safe = a plain payment
-    if (!ownedBy[main] && /safe/i.test(project || '') && !hits.length) return;
+    // somebody else's wallet (Safe, Abstract Global Wallet, other smart accounts) = a plain payment to a person
+    const isWallet = agwSet.has(main) || /safe|accountproxy|smart ?account|smart ?wallet|kernel|lightaccount|modular ?account/i.test(project || '');
+    if (!ownedBy[main] && isWallet && !hits.length) return;
 
     const deposited = fmt(d.deposited, decOf(d.token)), withdrawn = fmt(d.withdrawn, decOf(d.token));
     const received = d.received.map((x) => ({ token: x.token, symbol: meta[x.token]?.symbol || '?', amount: fmt(x.raw, decOf(x.token)) }));
